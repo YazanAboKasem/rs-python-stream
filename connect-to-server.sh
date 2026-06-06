@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# =============================================================================
+# RoadShield — Connect Local MediaMTX to Remote Laravel Dashboard
+# =============================================================================
+#
+# ما الذي يفعله هذا السكريبت:
+#   1. يشغّل MediaMTX (يقرأ من كاميرات Hikvision عبر RTSP)
+#   2. يشغّل Cloudflare Tunnel (يعطي المتصفح عنوان HTTPS عام)
+#   3. يرسل URL الـ Tunnel تلقائياً لـ Laravel API
+#   4. عند الإيقاف (Ctrl+C) يُلغي تسجيل الـ URL
+#
+# لا تحتاج تعدّل .env أو تشغّل config:cache بعد الآن.
+# =============================================================================
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# =============================================================================
+# ▼  CONFIG — عدّل هذه القيم فقط عند تغيير السيرفر  ▼
+# =============================================================================
+
+LARAVEL_URL="https://controlroom.dubibid.com"
+SURVEILLANCE_TOKEN="b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
+
+HLS_PORT=8888
+MEDIAMTX_BIN="./mediamtx"
+MEDIAMTX_CONFIG="./mediamtx.yml"
+TUNNEL_LOG="/tmp/cloudflared-mediamtx.log"
+
+# =============================================================================
+
+MEDIAMTX_PID=""
+TUNNEL_PID=""
+CAMERA_CTRL_PID=""
+
+# ─── Colors ───────────────────────────────────────────────────────────────────
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; CYAN='\033[0;36m'; NC='\033[0m'
+
+log()     { echo -e "${GREEN}[connect]${NC} $*"; }
+info()    { echo -e "${BLUE}[connect]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[connect]${NC} $*"; }
+success() { echo -e "${BOLD}${GREEN}[connect]${NC} $*"; }
+err()     { echo -e "${RED}[connect] ERROR:${NC} $*" >&2; }
+
+# ─── Register tunnel URL with Laravel API ────────────────────────────────────
+register_tunnel() {
+    local url="$1"
+    local endpoint="${LARAVEL_URL}/api/surveillance/register-tunnel"
+
+    log "تسجيل URL في Laravel API..."
+
+    local response
+    response=$(curl -s -w "\n%{http_code}" -X POST "$endpoint" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${SURVEILLANCE_TOKEN}" \
+        -d "{\"hls_url\": \"${url}\"}" \
+        --connect-timeout 10 \
+        --max-time 15 2>/dev/null || echo -e "\nCURL_FAILED")
+
+    local http_body http_code
+    http_body=$(echo "$response" | sed '$d')   # all lines except last (macOS + Linux)
+    http_code=$(echo "$response" | tail -n 1)
+
+    if [[ "$http_code" == "200" ]]; then
+        success "✅ URL مسجّل بنجاح في Laravel!"
+        log "  → الكاميرات تعمل على: ${LARAVEL_URL}/surveillance"
+    elif [[ "$http_code" == "401" ]]; then
+        err "❌ Unauthorized — تأكد أن SURVEILLANCE_TOKEN يطابق .env على السيرفر"
+        err "  Token محلي: ${SURVEILLANCE_TOKEN:0:8}..."
+    elif [[ "$http_code" == "CURL_FAILED" ]]; then
+        err "❌ تعذّر الوصول لـ Laravel: ${endpoint}"
+        err "  تأكد أن السيرفر يعمل ومتصل بالإنترنت"
+    else
+        warn "⚠️  استجابة غير متوقعة (HTTP ${http_code}): ${http_body}"
+    fi
+}
+
+# ─── Clear tunnel URL from Laravel cache ─────────────────────────────────────
+clear_tunnel() {
+    local endpoint="${LARAVEL_URL}/api/surveillance/register-tunnel"
+    log "إلغاء تسجيل URL من Laravel..."
+    curl -s -X DELETE "$endpoint" \
+        -H "Authorization: Bearer ${SURVEILLANCE_TOKEN}" \
+        --connect-timeout 5 \
+        --max-time 10 2>/dev/null && log "URL أُلغي تسجيله." || true
+}
+
+# ─── Cleanup on Ctrl+C ───────────────────────────────────────────────────────
+cleanup() {
+    echo ""
+    log "إيقاف النظام..."
+    clear_tunnel
+    [[ -n "$CAMERA_CTRL_PID" ]] && kill "$CAMERA_CTRL_PID" 2>/dev/null && log "camera-control.py متوقف."
+    [[ -n "$TUNNEL_PID"      ]] && kill "$TUNNEL_PID"      2>/dev/null && log "Cloudflare Tunnel متوقف."
+    [[ -n "$MEDIAMTX_PID"   ]] && kill "$MEDIAMTX_PID"   2>/dev/null && log "MediaMTX متوقف."
+    log "تم الإيقاف بنجاح."
+    exit 0
+}
+trap cleanup INT TERM
+
+# ─── Check deps ───────────────────────────────────────────────────────────────
+if ! command -v cloudflared &>/dev/null; then
+    err "cloudflared غير مثبت. ثبّته: brew install cloudflared"
+    exit 1
+fi
+if ! command -v curl &>/dev/null; then
+    err "curl غير مثبت."
+    exit 1
+fi
+
+# ─── Download MediaMTX if missing ────────────────────────────────────────────
+if [[ ! -f "$MEDIAMTX_BIN" ]]; then
+    warn "MediaMTX غير موجود — يتم التحميل..."
+    MEDIAMTX_VERSION="v1.9.3"
+    ARCH=$(uname -m); [[ "$ARCH" == "arm64" ]] && ARCH="arm64" || ARCH="amd64"
+    URL_DL="https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_darwin_${ARCH}.tar.gz"
+    curl -fsSL -o mediamtx_tmp.tar.gz "$URL_DL"
+    tar -xzf mediamtx_tmp.tar.gz mediamtx
+    rm -f mediamtx_tmp.tar.gz
+    chmod +x mediamtx
+    log "MediaMTX جاهز."
+fi
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${BOLD}${CYAN}║  RoadShield Smart Surveillance — Auto-Connect               ║${NC}"
+echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+info "السيرفر: ${LARAVEL_URL}"
+info "المحلي:  MediaMTX ← كاميرات Hikvision"
+echo ""
+
+# ─── 1. Start MediaMTX ────────────────────────────────────────────────────────
+log "تشغيل MediaMTX..."
+
+# Kill any stale MediaMTX / cloudflared from a previous run
+pkill -f "mediamtx" 2>/dev/null || true
+pkill -f "cloudflared tunnel" 2>/dev/null || true
+sleep 1   # wait for ports to free up
+
+"$MEDIAMTX_BIN" "$MEDIAMTX_CONFIG" &
+MEDIAMTX_PID=$!
+sleep 2
+
+if ! kill -0 "$MEDIAMTX_PID" 2>/dev/null; then
+    err "MediaMTX فشل. راجع mediamtx.yml"
+    exit 1
+fi
+log "MediaMTX يعمل (PID: $MEDIAMTX_PID)"
+
+# ─── 1b. Start camera-control.py (PTZ agent) ─────────────────────────────────
+if command -v python3 &>/dev/null && [[ -f "camera-control.py" ]]; then
+    log "تشغيل camera-control.py (PTZ agent)..."
+    python3 camera-control.py > /tmp/camera-control.log 2>&1 &
+    CAMERA_CTRL_PID=$!
+    sleep 1
+    if kill -0 "$CAMERA_CTRL_PID" 2>/dev/null; then
+        log "camera-control.py يعمل (PID: $CAMERA_CTRL_PID)"
+    else
+        warn "camera-control.py فشل في التشغيل. تحقق من: /tmp/camera-control.log"
+        CAMERA_CTRL_PID=""
+    fi
+else
+    warn "camera-control.py غير موجود أو python3 غير متاح — PTZ غير مفعّل."
+fi
+echo ""
+
+# ─── 2. Start Cloudflare Tunnel ───────────────────────────────────────────────
+log "تشغيل Cloudflare Tunnel..."
+rm -f "$TUNNEL_LOG"
+
+# Redirect stdout+stderr directly to log file.
+# IMPORTANT: do NOT use --logfile — it outputs JSON format which hides the URL banner.
+# Direct redirect captures the human-readable text format where the URL appears.
+cloudflared tunnel \
+    --url "http://localhost:${HLS_PORT}" \
+    --no-autoupdate \
+    > "$TUNNEL_LOG" 2>&1 &
+TUNNEL_PID=$!
+
+# Show cloudflared output in terminal as it arrives (background)
+tail -f "$TUNNEL_LOG" 2>/dev/null &
+TAIL_PID=$!
+
+# Poll log for URL — up to 45 seconds
+log "انتظار URL من Cloudflare..."
+TUNNEL_URL=""
+for i in $(seq 1 45); do
+    sleep 1
+    if [[ -f "$TUNNEL_LOG" ]]; then
+        # Try plain-text format first (when cloudflared output is not a TTY)
+        TUNNEL_URL=$(grep -oP 'https://[a-zA-Z0-9\-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
+        # Fallback: JSON format — URL is inside a "message" field
+        if [[ -z "$TUNNEL_URL" ]]; then
+            TUNNEL_URL=$(python3 -c "
+import sys, re, json
+for line in open('$TUNNEL_LOG'):
+    try:
+        msg = json.loads(line).get('message','')
+    except:
+        msg = line
+    m = re.search(r'https://[a-zA-Z0-9-]+\.trycloudflare\.com', msg)
+    if m: print(m.group(0)); break
+" 2>/dev/null || true)
+        fi
+        [[ -n "$TUNNEL_URL" ]] && break
+    fi
+    (( i % 10 == 0 )) && log "  جاري الانتظار... ($i/45 ثانية)"
+done
+
+# Stop tail once we have the URL (or timed out)
+kill "$TAIL_PID" 2>/dev/null || true
+wait "$TAIL_PID" 2>/dev/null || true
+
+if [[ -z "$TUNNEL_URL" ]]; then
+    warn "تعذّر استلام URL تلقائياً."
+    warn "تحقق من: $TUNNEL_LOG"
+    warn "شغّل يدوياً وأضف URL للـ .env على السيرفر"
+else
+    # ─── 3. Register URL with Laravel API ─────────────────────────────────────
+    echo ""
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}  Tunnel URL:${NC} ${CYAN}${TUNNEL_URL}${NC}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    register_tunnel "$TUNNEL_URL"
+
+    echo ""
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BOLD}  Dashboard:${NC} ${CYAN}${LARAVEL_URL}/surveillance${NC}"
+    echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+fi
+
+log "النظام يعمل. اضغط Ctrl+C للإيقاف."
+echo ""
+
+# Wait for either process to exit
+wait "$MEDIAMTX_PID" "$TUNNEL_PID"

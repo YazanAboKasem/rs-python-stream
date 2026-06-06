@@ -1,0 +1,48 @@
+logLevel: info
+
+api: yes
+apiAddress: 127.0.0.1:9997
+
+rtsp: yes
+rtspAddress: :8554
+
+hls: yes
+hlsAddress: :8888
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+# Allow the dashboard domain to fetch HLS (CORS)
+hlsAllowOrigin: "*"
+
+webrtc: yes
+webrtcAddress: :8889
+webrtcAllowOrigin: "*"
+
+# Disable unused protocols to avoid port conflicts (SRT uses UDP 8000 by default)
+srt: no
+rtmp: no
+
+
+paths:
+  # ── Camera 1 — 192.168.1.64 ─────────────────────────────────────────────
+  cam1:                           # HD  ~2-6 Mbps  (1080p/720p full FPS)
+    source: rtsp://admin:hikvision%4012@192.168.1.64:554/Streaming/Channels/101
+    sourceProtocol: tcp
+
+  cam1_sub:                       # SD  ~300-800 Kbps  (sub stream from camera)
+    source: rtsp://admin:hikvision%4012@192.168.1.64:554/Streaming/Channels/102
+    sourceProtocol: tcp
+
+  # ── Camera 2 — 192.168.1.65 ─────────────────────────────────────────────
+  cam2:                           # HD  ~2-6 Mbps
+    source: rtsp://admin:hikvision%4012@192.168.1.65:554/Streaming/Channels/101
+    sourceProtocol: tcp
+
+  cam2_sub:                       # SD  ~300-800 Kbps
+    source: rtsp://admin:hikvision%4012@192.168.1.65:554/Streaming/Channels/102
+    sourceProtocol: tcp
+
+  # ── Dynamic quality streams — published by camera-control.py + FFmpeg ───────
+  # Python reads quality settings from Laravel API and re-encodes at that quality.
+  # Browser always connects to cam1_live — quality changes server-side.
+  cam1_live:   # Dynamic: resolution/fps/bitrate set from Laravel dashboard
+  cam2_live:   # Dynamic: resolution/fps/bitrate set from Laravel dashboard

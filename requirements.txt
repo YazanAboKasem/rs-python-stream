@@ -1,0 +1,18 @@
+# RoadShield — Python Stream Service
+# Phase 1 dependencies
+#
+# NOTE: GStreamer is a SYSTEM library — install via package manager, NOT pip:
+#   macOS:  brew install gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly
+#   Ubuntu: sudo apt install python3-gst-1.0 gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+#           gstreamer1.0-plugins-ugly gstreamer1.0-tools gstreamer1.0-x264
+#   Jetson: sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good
+#           gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
+
+# No pip dependencies required for Phase 1.
+# stream.py uses only Python stdlib (subprocess, platform, signal, time, sys, os).
+
+# ─── Future AI phase will require: ───────────────────────────────────────────
+# opencv-python
+# numpy
+# requests          # to POST alerts to Laravel API
+# Pillow            # for snapshot encoding
