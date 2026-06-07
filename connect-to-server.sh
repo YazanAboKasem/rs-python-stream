@@ -114,8 +114,23 @@ fi
 if [[ ! -f "$MEDIAMTX_BIN" ]]; then
     warn "MediaMTX غير موجود — يتم التحميل..."
     MEDIAMTX_VERSION="v1.9.3"
-    ARCH=$(uname -m); [[ "$ARCH" == "arm64" ]] && ARCH="arm64" || ARCH="amd64"
-    URL_DL="https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_darwin_${ARCH}.tar.gz"
+    
+    # OS detection
+    OS="linux"
+    case "$(uname -s)" in
+        Darwin*) OS="darwin" ;;
+        Linux*)  OS="linux"  ;;
+    esac
+    
+    # Arch detection
+    ARCH="amd64"
+    case "$(uname -m)" in
+        x86_64)        ARCH="amd64" ;;
+        aarch64|arm64) ARCH="arm64" ;;
+        armv7l)        ARCH="armv7" ;;
+    esac
+    
+    URL_DL="https://github.com/bluenviron/mediamtx/releases/download/${MEDIAMTX_VERSION}/mediamtx_${MEDIAMTX_VERSION}_${OS}_${ARCH}.tar.gz"
     curl -fsSL -o mediamtx_tmp.tar.gz "$URL_DL"
     tar -xzf mediamtx_tmp.tar.gz mediamtx
     rm -f mediamtx_tmp.tar.gz
