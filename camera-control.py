@@ -33,6 +33,7 @@ SURVEILLANCE_TOKEN = "b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa3
 CAMERAS = {
     "cam1": {"ip": "192.168.1.64", "user": "admin", "password": "hikvision@12", "channel": 1},
     "cam2": {"ip": "192.168.1.65", "user": "admin", "password": "hikvision@12", "channel": 1},
+    "cam3": {"ip": "192.168.1.67", "user": "admin", "password": "hikvision@12", "channel": 1},
 }
 SHOW_LOCAL_VIEWER = True  # Set to True to open a local window showing the transcoded stream
 POLL_INTERVAL  = 0.8   # seconds between polls per camera

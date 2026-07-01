@@ -63,6 +63,19 @@ CAMERAS = [
         "fps": 15,
         "bitrate": 2000,
     },
+    {
+        "id": "cam3",
+        "label": "Camera 3 — Back View",
+        # For USB/webcam (third camera):
+        "source_linux": "v4l2src device=/dev/video4",
+        "source_macos": "avfvideosrc device-index=2",
+        # For IP camera (uncomment to use instead of USB):
+        # "source_rtsp": "rtspsrc location=rtsp://admin:hikvision%4012@192.168.1.67:554/Streaming/Channels/101 latency=100",
+        "width": 1280,
+        "height": 720,
+        "fps": 15,
+        "bitrate": 2000,
+    },
 ]
 
 # =============================================================================
