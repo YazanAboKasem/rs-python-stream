@@ -169,7 +169,7 @@ log "MediaMTX يعمل (PID: $MEDIAMTX_PID)"
 # ─── 1b. Start camera-control.py (PTZ agent) ─────────────────────────────────
 if command -v python3 &>/dev/null && [[ -f "camera-control.py" ]]; then
     log "تشغيل camera-control.py (PTZ agent)..."
-    python3 camera-control.py > /tmp/camera-control.log 2>&1 &
+    python3 camera-control.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" > /tmp/camera-control.log 2>&1 &
     CAMERA_CTRL_PID=$!
     sleep 1
     if kill -0 "$CAMERA_CTRL_PID" 2>/dev/null; then

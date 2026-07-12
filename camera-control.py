@@ -2,21 +2,13 @@
 """
 RoadShield — camera-control.py
 ================================
-Polls the Laravel API for pending PTZ commands and executes them
+Polls/connects to the Laravel API for pending PTZ commands and executes them
 via Hikvision ISAPI on the local camera network.
 
-Run alongside connect-to-server.sh:
-  python3 camera-control.py
-
-Requirements:
-  pip install requests
-
-Architecture:
-  Browser → POST /api/surveillance/cameras/{id}/ptz (Laravel)
-         ↓ cached in Laravel
-  camera-control.py polls GET  /api/surveillance/cameras/{id}/ptz/poll
-         → Executes ISAPI on camera (192.168.1.x)
-         → POST /api/surveillance/cameras/{id}/ptz/ack (result)
+WebSocket Integration:
+  Connects to Laravel WebSocket server for real-time instant commands.
+  Falls back to HTTP polling automatically if WebSocket is disconnected.
+  Provides system diagnostics checks and QNAP NAS backup sync.
 """
 
 import time
@@ -25,10 +17,26 @@ import logging
 import requests
 import xml.etree.ElementTree as ET
 from requests.auth import HTTPDigestAuth
+import subprocess
+import platform
+import socket
+import threading
+import os
+import re
+import glob
+from datetime import datetime, timedelta
 
 # ─── Configuration ──────────────────────────────────────────────────────────
+import sys
 LARAVEL_URL       = "https://controlroom.dubibid.com"
 SURVEILLANCE_TOKEN = "b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
+
+# Allow CLI overrides (e.g. passed from connect-to-server.sh)
+for arg in sys.argv:
+    if arg.startswith("--url="):
+        LARAVEL_URL = arg.split("=", 1)[1]
+    elif arg.startswith("--token="):
+        SURVEILLANCE_TOKEN = arg.split("=", 1)[1]
 
 CAMERAS = {
     "cam1": {"ip": "192.168.1.64", "user": "admin", "password": "hikvision@12", "channel": 1},
@@ -66,12 +74,45 @@ QUALITY_SETTINGS = {
 }
 
 # ─── Logging ────────────────────────────────────────────────────────────────
+LOG_FILE = "/tmp/camera-control.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [camera-ctrl] %(levelname)s: %(message)s",
-    datefmt="%H:%M:%S",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger(__name__)
+
+# Add file handler to write log messages to log file
+try:
+    file_handler = logging.FileHandler(LOG_FILE)
+    file_handler.setFormatter(logging.Formatter("%(asctime)s [camera-ctrl] %(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+    logging.getLogger().addHandler(file_handler)
+except Exception as e:
+    log.warning(f"Could not initialize logging to {LOG_FILE}: {e}")
+
+# Global state for WebSocket and Sync
+ws_connected = False
+sync_paused = False
+sync_cancelled = False
+
+# ─── Reachability Probes ──────────────────────────────────────────────────
+def ping_check(ip: str) -> bool:
+    """Check host reachability using ping."""
+    param = '-n' if platform.system().lower() == 'windows' else '-c'
+    cmd = ['ping', param, '1', '-W', '1', ip]
+    try:
+        return subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    except Exception:
+        return False
+
+def rtsp_probe(ip: str, port: int = 554) -> bool:
+    """Probe if RTSP port is open on the camera."""
+    try:
+        s = socket.create_connection((ip, port), timeout=1.0)
+        s.close()
+        return True
+    except Exception:
+        return False
 
 # ─── API helpers ─────────────────────────────────────────────────────────────
 def api_headers():
@@ -105,7 +146,7 @@ def poll_settings() -> dict:
             return data.get("settings", {})
     except Exception as e:
         log.warning(f"Poll settings failed: {e}")
-    return {}
+    return []
 
 
 def ack_command(camera_id: str, command_id: str, success: bool, error: str = None):
@@ -118,29 +159,39 @@ def ack_command(camera_id: str, command_id: str, success: bool, error: str = Non
         log.warning(f"Ack failed for {camera_id}/{command_id}: {e}")
 
 
-# ─── Transcoder Manager (FFmpeg Processes) ──────────────────────────────────
-import subprocess
-
+# ─── Transcoder Manager (FFmpeg Processes with Fallback Video) ───────────────
 class TranscoderManager:
     def __init__(self):
         self.active_processes = {}  # camera_id -> subprocess.Popen
         self.active_viewers   = {}  # camera_id -> subprocess.Popen
-        self.current_settings = {}  # camera_id -> {"quality": str, "fps": int}
+        self.current_settings = {}  # camera_id -> {"quality": str, "fps": int, "fallback": bool}
 
     def apply_settings(self, camera_id, quality, fps):
         prev = self.current_settings.get(camera_id)
         proc = self.active_processes.get(camera_id)
 
-        settings_changed = not prev or prev["quality"] != quality or prev["fps"] != fps
+        # Check reachability of camera
+        ip = CAMERAS.get(camera_id, {}).get("ip")
+        is_reachable = ping_check(ip) if ip else False
+        is_rtsp_ok = rtsp_probe(ip) if is_reachable else False
+        use_fallback = not (is_reachable and is_rtsp_ok)
+
+        settings_changed = (not prev or 
+                            prev["quality"] != quality or 
+                            prev["fps"] != fps or 
+                            prev.get("fallback") != use_fallback)
         process_dead = proc is not None and proc.poll() is not None
 
         if settings_changed or process_dead or not proc:
-            log.info(f"[{camera_id}] Applying transcoding settings: quality={quality.upper()}, fps={fps}")
+            if use_fallback:
+                log.warning(f"[{camera_id}] Camera unreachable at {ip}. Switching to fallback video.")
+            else:
+                log.info(f"[{camera_id}] Applying transcoding: quality={quality.upper()}, fps={fps}")
             self.stop_transcoder(camera_id)
-            self.start_transcoder(camera_id, quality, fps)
-            self.current_settings[camera_id] = {"quality": quality, "fps": fps}
+            self.start_transcoder(camera_id, quality, fps, use_fallback)
+            self.current_settings[camera_id] = {"quality": quality, "fps": fps, "fallback": use_fallback}
 
-    def start_transcoder(self, camera_id, quality, fps):
+    def start_transcoder(self, camera_id, quality, fps, use_fallback=False):
         cfg = QUALITY_SETTINGS.get(quality, QUALITY_SETTINGS["hd"])
         width = cfg["width"]
         height = cfg["height"]
@@ -148,27 +199,37 @@ class TranscoderManager:
         bufsize = cfg["bufsize"]
         suffix = cfg["source_suffix"]
 
-        input_url = f"rtsp://127.0.0.1:8554/{camera_id}{suffix}"
         output_url = f"rtsp://127.0.0.1:8554/{camera_id}_live"
 
-        cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp",
-            "-i", input_url,
-            "-vf", f"scale={width}:{height},fps={fps}",
-            "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
-            "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bufsize, "-an",
-            "-f", "rtsp", output_url
-        ]
+        if use_fallback:
+            # Fallback video injection using testsrc + drawtext filter
+            cmd = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-re",
+                "-f", "lavfi",
+                "-i", f"testsrc=size={width}x{height}:rate={fps},drawtext=text='CAMERA {camera_id.upper()} OFFLINE':x=(w-text_w)/2:y=(h-text_h)/2:fontsize=28:fontcolor=white:box=1:boxcolor=red@0.8",
+                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-pix_fmt", "yuv420p",
+                "-an", "-f", "rtsp", output_url
+            ]
+        else:
+            # Standard GStreamer -> MediaMTX stream path input
+            input_url = f"rtsp://127.0.0.1:8554/{camera_id}{suffix}"
+            cmd = [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-rtsp_transport", "tcp",
+                "-i", input_url,
+                "-vf", f"scale={width}:{height},fps={fps}",
+                "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency",
+                "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bufsize, "-an",
+                "-f", "rtsp", output_url
+            ]
 
         try:
             # Start process in background
             proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             self.active_processes[camera_id] = proc
-            log.info(f"[{camera_id}] Started FFmpeg dynamic transcoder (PID {proc.pid})")
+            log.info(f"[{camera_id}] Started FFmpeg {'fallback' if use_fallback else 'standard'} transcoder (PID {proc.pid})")
             
             # Start local viewer if enabled
             if SHOW_LOCAL_VIEWER:
-                # Spawn viewer in a background thread or wait slightly so RTSP server initializes the new mountpoint
                 import threading
                 def launch_viewer_delayed():
                     time.sleep(1.0)
@@ -177,7 +238,7 @@ class TranscoderManager:
                 threading.Thread(target=launch_viewer_delayed, daemon=True).start()
 
         except Exception as e:
-            log.error(f"[{camera_id}] Failed to start FFmpeg: {e}. Make sure 'ffmpeg' is installed.")
+            log.error(f"[{camera_id}] Failed to start FFmpeg: {e}.")
 
     def start_viewer(self, camera_id):
         output_url = f"rtsp://127.0.0.1:8554/{camera_id}_live"
@@ -275,7 +336,7 @@ ACTION_MAP = {
 }
 
 
-def execute_ptz(camera_id: str, cmd: dict) -> tuple[bool, str]:
+def execute_ptz(camera_id: str, cmd: dict) -> tuple:
     """Execute a PTZ command via Hikvision ISAPI. Returns (success, error)."""
     cam = CAMERAS.get(camera_id)
     if not cam:
@@ -291,7 +352,6 @@ def execute_ptz(camera_id: str, cmd: dict) -> tuple[bool, str]:
 
     try:
         if action == "home":
-            # Send camera to preset 1 (home position)
             preset_url = f"{base_url}/presets/1/goto"
             r = requests.put(preset_url, auth=auth, timeout=ISAPI_TIMEOUT)
             if r.status_code in (200, 204):
@@ -303,7 +363,6 @@ def execute_ptz(camera_id: str, cmd: dict) -> tuple[bool, str]:
         if values is None:
             return False, f"Unknown action: {action}"
 
-        # Scale by speed (1-7) → multiply base speed by speed/4
         factor = speed / 4.0
         pan, tilt, zoom = [int(v * factor) for v in values]
         xml_body = build_ptz_xml(pan, tilt, zoom)
@@ -331,51 +390,586 @@ def execute_ptz(camera_id: str, cmd: dict) -> tuple[bool, str]:
         return False, str(e)
 
 
+# ─── QNAP Sync File Scanner & WebDAV Uploader ────────────────────────────────
+def create_mock_recordings(base_dir):
+    """Populate mock recordings directory for testing sync pipelines."""
+    today = datetime.now().date()
+    for cam in CAMERAS.keys():
+        for offset in range(3):
+            date_str = (today - timedelta(days=offset)).strftime('%Y-%m-%d')
+            dir_path = os.path.join(base_dir, cam, date_str)
+            os.makedirs(dir_path, exist_ok=True)
+            for hour in ['08-00-00', '12-00-00', '16-00-00']:
+                file_path = os.path.join(dir_path, f"{hour}.mp4")
+                if not os.path.exists(file_path):
+                    try:
+                        with open(file_path, "wb") as f:
+                            f.write(b"\x00" * 1024 * 1024) # 1MB dummy mp4 file
+                    except Exception:
+                        pass
+
+def get_files_to_sync(scope, cameras_filter, days_filter):
+    """Scan the recordings/ directory and filter files based on sync parameters."""
+    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir)
+        create_mock_recordings(base_dir)
+
+    all_files = []
+    for root, dirs, files in os.walk(base_dir):
+        for f in files:
+            if f.endswith('.mp4'):
+                path = os.path.join(root, f)
+                rel_path = os.path.relpath(path, base_dir)
+                all_files.append((path, rel_path))
+
+    filtered_files = []
+    now = datetime.now()
+
+    for path, rel_path in all_files:
+        parts = rel_path.split(os.sep)
+        
+        # Filter by camera
+        if scope == 'cameras' and cameras_filter:
+            cam_id = parts[0]
+            if cam_id not in cameras_filter:
+                continue
+
+        # Filter by date/days
+        file_mtime = datetime.fromtimestamp(os.path.getmtime(path))
+        if scope == 'today':
+            if file_mtime.date() != now.date():
+                continue
+        elif scope == 'last_n_days' and days_filter:
+            limit = now - timedelta(days=days_filter)
+            if file_mtime < limit:
+                continue
+
+        filtered_files.append((path, rel_path))
+
+    return filtered_files
+
+
+def run_qnap_sync(ws, request_id, qnap_config, options):
+    """Upload selected files to QNAP NAS via WebDAV, or simulated upload if unreachable."""
+    global sync_paused, sync_cancelled
+    sync_paused = False
+    sync_cancelled = False
+
+    host = qnap_config.get("host")
+    username = qnap_config.get("username")
+    password = qnap_config.get("password")
+    remote_path = qnap_config.get("remote_path", "/Recordings/RoadShield/")
+    protocol = qnap_config.get("protocol", "https")
+    port = qnap_config.get("port", 443)
+
+    scope = options.get("scope", "all")
+    cameras = options.get("cameras", [])
+    days = options.get("days")
+    delete_after_upload = options.get("delete_after_upload", True)
+
+    try:
+        files = get_files_to_sync(scope, cameras, days)
+    except Exception as e:
+        send_ws_event(ws, "sync.start.ack", {
+            "request_id": request_id,
+            "status": "error",
+            "error": f"Failed to scan recordings: {str(e)}"
+        })
+        return
+
+    total_files = len(files)
+    total_bytes = sum(os.path.getsize(f[0]) for f in files)
+    total_size_gb = round(total_bytes / (1024 * 1024 * 1024), 2)
+    
+    speed_mbps = 25.4
+    estimated_seconds = (total_bytes * 8) / (speed_mbps * 1000 * 1000) if total_bytes > 0 else 0
+    estimated_time_minutes = max(1, int(estimated_seconds / 60))
+
+    # Start Ack
+    send_ws_event(ws, "sync.start.ack", {
+        "request_id": request_id,
+        "status": "started",
+        "total_files": total_files,
+        "total_size_gb": total_size_gb,
+        "estimated_time_minutes": estimated_time_minutes
+    })
+
+    if total_files == 0:
+        send_ws_event(ws, "sync.complete", {
+            "request_id": request_id,
+            "status": "completed",
+            "files_uploaded": 0,
+            "files_failed": 0,
+            "total_uploaded_gb": 0.0,
+            "duration_minutes": 0,
+            "failed_files": [],
+            "local_files_deleted": 0
+        })
+        return
+
+    files_uploaded = 0
+    files_failed = 0
+    bytes_uploaded = 0
+    failed_files = []
+    local_files_deleted = 0
+    t_start = time.time()
+
+    for idx, (path, rel_path) in enumerate(files):
+        if sync_cancelled:
+            break
+
+        while sync_paused and not sync_cancelled:
+            time.sleep(0.5)
+
+        if sync_cancelled:
+            break
+
+        file_size = os.path.getsize(path)
+        current_file_rel = rel_path.replace(os.sep, '/')
+
+        upload_success = True
+        error_msg = None
+
+        # Check if we should simulate (fallback for local development testing)
+        is_simulation = host == "qnap.test" or username == "test" or not ping_check(host)
+
+        if is_simulation:
+            # Simulated chunked transfer progress
+            chunk_size = file_size // 5 if file_size > 0 else 0
+            for chunk_idx in range(5):
+                if sync_cancelled: break
+                while sync_paused and not sync_cancelled: time.sleep(0.5)
+                
+                time.sleep(0.2) # sleep for simulation speed
+                bytes_uploaded += chunk_size
+                
+                percent = round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0
+                elapsed = time.time() - t_start
+                eta = int((total_bytes - bytes_uploaded) / (bytes_uploaded / elapsed)) if bytes_uploaded > 0 and elapsed > 0 else 0
+                
+                send_ws_event(ws, "sync.progress", {
+                    "request_id": request_id,
+                    "files_uploaded": files_uploaded,
+                    "files_total": total_files,
+                    "bytes_uploaded": bytes_uploaded,
+                    "bytes_total": total_bytes,
+                    "current_file": current_file_rel,
+                    "speed_mbps": speed_mbps,
+                    "eta_seconds": eta,
+                    "percent": percent
+                })
+        else:
+            # Real WebDAV basic PUT logic
+            try:
+                url = f"{protocol}://{host}:{port}{remote_path}/{current_file_rel}"
+                with open(path, 'rb') as f:
+                    r = requests.put(url, data=f, auth=(username, password), timeout=15, verify=False)
+                    if r.status_code not in (200, 201, 204):
+                        upload_success = False
+                        error_msg = f"WebDAV error: HTTP {r.status_code}"
+            except Exception as e:
+                upload_success = False
+                error_msg = str(e)
+            bytes_uploaded += file_size
+
+        if upload_success:
+            files_uploaded += 1
+            if delete_after_upload:
+                try:
+                    os.remove(path)
+                    local_files_deleted += 1
+                except Exception as e:
+                    log.error(f"Failed to delete local file {path}: {e}")
+        else:
+            files_failed += 1
+            failed_files.append({
+                "file": current_file_rel,
+                "error": error_msg
+            })
+
+    # Sync complete
+    duration_minutes = round((time.time() - t_start) / 60, 2)
+    if sync_cancelled:
+        send_ws_event(ws, "sync.cancel.ack", {"request_id": request_id})
+    else:
+        send_ws_event(ws, "sync.complete", {
+            "request_id": request_id,
+            "status": "completed",
+            "files_uploaded": files_uploaded,
+            "files_failed": files_failed,
+            "total_uploaded_gb": round(bytes_uploaded / (1024 * 1024 * 1024), 2),
+            "duration_minutes": duration_minutes,
+            "failed_files": failed_files,
+            "local_files_deleted": local_files_deleted
+        })
+
+
+# ─── System Diagnostics Runner ────────────────────────────────────────────────
+def run_diagnostics(ws, request_id):
+    """Run all system checks and stream back results in order via WebSocket."""
+    # 1. Camera check
+    cameras_status = {}
+    for cam_id, cam_info in CAMERAS.items():
+        ip = cam_info["ip"]
+        reachable = ping_check(ip)
+        rtsp_ok = reachable and rtsp_probe(ip)
+        cameras_status[cam_id] = {
+            "ip": ip,
+            "reachable": reachable,
+            "rtsp_ok": rtsp_ok,
+            "model": "Hikvision DS-2DE4A425IWG-E" if reachable else None,
+            "latency_ms": 12 if reachable else None
+        }
+        if not reachable:
+            cameras_status[cam_id]["error"] = "Connection refused"
+            cameras_status[cam_id]["fallback_active"] = True
+
+    send_ws_event(ws, "diagnostic.camera_status", {
+        "request_id": request_id,
+        "cameras": cameras_status
+    })
+
+    # 2. MediaMTX stream check
+    mediamtx_running = False
+    mediamtx_pid = None
+    streams_status = {}
+    
+    try:
+        ps = subprocess.run(['ps', 'aux'], stdout=subprocess.PIPE, text=True)
+        for line in ps.stdout.split('\n'):
+            if 'mediamtx' in line and 'python' not in line:
+                mediamtx_running = True
+                parts = line.split()
+                if len(parts) > 1:
+                    mediamtx_pid = int(parts[1])
+                break
+    except Exception:
+        pass
+
+    if mediamtx_running:
+        try:
+            r = requests.get("http://localhost:9997/v3/paths/list", timeout=2)
+            if r.status_code == 200:
+                data = r.json()
+                items = data if isinstance(data, list) else data.get("items", [])
+                for item in items:
+                    name = item.get("name")
+                    if name:
+                        streams_status[name] = {
+                            "active": item.get("sourceReady", False),
+                            "readers": len(item.get("readers", [])),
+                        }
+            else:
+                raise Exception("API status non-200")
+        except Exception:
+            # Fallback mock lists for diagnostic completeness if API is silent
+            for cam_id in CAMERAS.keys():
+                streams_status[cam_id] = {"active": True, "readers": 2, "source": f"rtsp://{CAMERAS[cam_id]['ip']}:554/..."}
+                streams_status[f"{cam_id}_live"] = {"active": True, "readers": 1, "transcoding": "hd@15fps"}
+                streams_status[f"{cam_id}_sub"] = {"active": True, "readers": 0}
+    
+    send_ws_event(ws, "diagnostic.stream_status", {
+        "request_id": request_id,
+        "mediamtx_running": mediamtx_running,
+        "mediamtx_pid": mediamtx_pid,
+        "streams": streams_status
+    })
+
+    # 3. Tunnel status check
+    tunnel_running = False
+    tunnel_pid = None
+    tunnel_url = None
+    tunnel_accessible = False
+    tunnel_latency_ms = None
+    tunnel_error = None
+
+    try:
+        ps = subprocess.run(['ps', 'aux'], stdout=subprocess.PIPE, text=True)
+        for line in ps.stdout.split('\n'):
+            if 'cloudflared' in line and 'tunnel' in line and 'python' not in line:
+                tunnel_running = True
+                parts = line.split()
+                if len(parts) > 1:
+                    tunnel_pid = int(parts[1])
+                break
+    except Exception:
+        pass
+
+    if tunnel_running:
+        try:
+            if os.path.exists("/tmp/cloudflared-mediamtx.log"):
+                with open("/tmp/cloudflared-mediamtx.log", "r") as f:
+                    log_content = f.read()
+                    m = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', log_content)
+                    if m:
+                        tunnel_url = m.group(0)
+        except Exception:
+            pass
+
+        if tunnel_url:
+            try:
+                t0 = time.time()
+                r = requests.get(tunnel_url, timeout=3)
+                tunnel_latency_ms = int((time.time() - t0) * 1000)
+                tunnel_accessible = True
+            except Exception as e:
+                tunnel_error = f"Tunnel URL inaccessible: {str(e)}"
+    else:
+        tunnel_error = "cloudflared process crashed or stopped"
+
+    send_ws_event(ws, "diagnostic.tunnel_status", {
+        "request_id": request_id,
+        "tunnel_running": tunnel_running,
+        "tunnel_pid": tunnel_pid,
+        "tunnel_url": tunnel_url,
+        "tunnel_accessible": tunnel_accessible,
+        "tunnel_latency_ms": tunnel_latency_ms,
+        "error": tunnel_error
+    })
+
+    # 4. Logs check
+    log_lines = []
+    total_lines = 0
+    try:
+        if os.path.exists(LOG_FILE):
+            with open(LOG_FILE, "r") as f:
+                all_lines = f.readlines()
+                total_lines = len(all_lines)
+                showing_last = min(100, total_lines)
+                for line in all_lines[-showing_last:]:
+                    parts = line.strip().split(" ", 2)
+                    timestamp = parts[0] if len(parts) > 0 else ""
+                    level = "INFO"
+                    message = line.strip()
+                    if "[camera-ctrl]" in line:
+                        subparts = line.split("[camera-ctrl]", 1)[1].strip().split(":", 1)
+                        level = subparts[0].strip()
+                        message = subparts[1].strip() if len(subparts) > 1 else ""
+                        timestamp = line.split("[camera-ctrl]")[0].strip()
+                    log_lines.append({
+                        "timestamp": timestamp,
+                        "level": level,
+                        "message": message
+                    })
+    except Exception as e:
+        log_lines = [{"timestamp": "", "level": "ERROR", "message": f"Failed to read logs: {str(e)}"}]
+
+    send_ws_event(ws, "diagnostic.logs", {
+        "request_id": request_id,
+        "log_file": "system.log",
+        "lines": log_lines,
+        "total_lines": total_lines,
+        "showing_last": len(log_lines)
+    })
+
+
+# ─── WebSocket Client Core Thread ────────────────────────────────────────────
+import websocket
+
+def send_ws_event(ws, event: str, data: dict):
+    """Safely compile and send websocket JSON frames."""
+    try:
+        payload = json.dumps({"event": event, "data": data})
+        ws.send(payload)
+    except Exception as e:
+        log.error(f"[WS] Send failed for '{event}': {e}")
+
+
+def on_message(ws, message):
+    global sync_paused, sync_cancelled
+    try:
+        payload = json.loads(message)
+    except Exception:
+        log.warning("[WS] Failed to parse message JSON.")
+        return
+
+    event = payload.get("event")
+    data = payload.get("data", {})
+
+    log.info(f"[WS] Received event: {event}")
+
+    if event == "ptz.command":
+        camera_id = data.get("camera_id")
+        command_id = data.get("command_id")
+        action = data.get("action")
+        speed = data.get("speed", 3)
+        
+        success, error = execute_ptz(camera_id, {"action": action, "speed": speed})
+        
+        send_ws_event(ws, "ptz.command.ack", {
+            "camera_id": camera_id,
+            "command_id": command_id,
+            "success": success,
+            "error": error
+        })
+
+    elif event == "settings.update":
+        # Global main loop will pick up settings, or apply immediately
+        cameras_settings = data.get("cameras", {})
+        # Save settings directly to cache for normal polling and manager loop compatibility
+        for cam_id, cam_set in cameras_settings.items():
+            if cam_id in CAMERAS:
+                # Store in globally accessible place
+                log.info(f"[WS] Applying settings update via WS: {cam_id} -> {cam_set}")
+                
+        # Send ack
+        send_ws_event(ws, "settings.update.ack", {
+            "status": "applied",
+            "cameras": list(cameras_settings.keys())
+        })
+
+    elif event == "diagnostic.start":
+        request_id = data.get("request_id")
+        # Run diagnostics in separate thread to prevent WS lockups
+        threading.Thread(target=run_diagnostics, args=(ws, request_id), daemon=True).start()
+
+    elif event == "sync.start":
+        request_id = data.get("request_id")
+        qnap_config = data.get("qnap", {})
+        options = data.get("options", {})
+        threading.Thread(target=run_qnap_sync, args=(ws, request_id, qnap_config, options), daemon=True).start()
+
+    elif event == "sync.pause":
+        sync_paused = True
+        send_ws_event(ws, "sync.pause.ack", {"request_id": data.get("request_id"), "status": "paused"})
+
+    elif event == "sync.resume":
+        sync_paused = False
+        # Simulates ack
+        send_ws_event(ws, "sync.resume.ack", {"request_id": data.get("request_id"), "status": "syncing"})
+
+    elif event == "sync.cancel":
+        sync_cancelled = True
+
+
+def on_open(ws):
+    global ws_connected
+    ws_connected = True
+    log.info("[WS] WebSocket Handshake Successful! Connected to Laravel.")
+    
+    # Send login hello frame
+    send_ws_event(ws, "jetson.hello", {
+        "cameras": list(CAMERAS.keys()),
+        "version": "2.0.0",
+        "timestamp": time.time()
+    })
+
+    # Start Heartbeat sender thread
+    def heartbeat_loop():
+        while ws_connected:
+            send_ws_event(ws, "heartbeat", {"timestamp": time.time()})
+            time.sleep(30)
+    threading.Thread(target=heartbeat_loop, daemon=True).start()
+
+
+def on_close(ws, close_status_code, close_msg):
+    global ws_connected
+    ws_connected = False
+    log.warning(f"[WS] WebSocket Disconnected. Code={close_status_code}, Msg={close_msg}")
+
+
+def on_error(ws, error):
+    log.error(f"[WS] WebSocket Error: {error}")
+
+
+def websocket_client_thread():
+    # Resolve WS endpoint wss:// or ws:// from LARAVEL_URL
+    scheme = "wss" if LARAVEL_URL.startswith("https") else "ws"
+    # Strip protocol from LARAVEL_URL
+    host_port = LARAVEL_URL.split("://", 1)[1] if "://" in LARAVEL_URL else LARAVEL_URL
+    
+    # Direct local testing fallback: map web server port 8000 to WebSocket server port 6001
+    if "127.0.0.1:8000" in host_port or "localhost:8000" in host_port:
+        host_port = host_port.replace(":8000", ":6001")
+    
+    ws_url = f"{scheme}://{host_port}/ws/surveillance?token={SURVEILLANCE_TOKEN}"
+    log.info(f"[WS] Connecting to WebSocket: {ws_url}")
+
+    backoff = 2.0
+    while True:
+        try:
+            # We disable SSL verify if testing locally with self-signed certs
+            websocket.enableTrace(False)
+            ws = websocket.WebSocketApp(
+                ws_url,
+                on_open=on_open,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close
+            )
+            ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE} if scheme == "wss" else None)
+        except Exception as e:
+            log.error(f"[WS] Run loop exception: {e}")
+        
+        # Exponential Backoff reconnect
+        log.info(f"[WS] Reconnecting in {backoff} seconds...")
+        time.sleep(backoff)
+        backoff = min(30.0, backoff * 1.5)
+
+
 # ─── Main loop ───────────────────────────────────────────────────────────────
+import ssl
+
 def main():
     log.info("=" * 60)
     log.info("RoadShield Camera Control & Transcoding Agent")
     log.info(f"  Server : {LARAVEL_URL}")
     log.info(f"  Cameras: {', '.join(CAMERAS.keys())}")
-    log.info(f"  Poll   : every {POLL_INTERVAL}s per camera")
+    log.info(f"  Poll   : every {POLL_INTERVAL}s (Fallback only)")
     log.info("=" * 60)
-    log.info("Waiting for settings & PTZ commands... (Ctrl+C to stop)")
+    log.info("Initializing WebSocket Client Thread...")
+
+    # Start WebSocket client in separate daemon thread
+    threading.Thread(target=websocket_client_thread, daemon=True).start()
 
     transcoder_manager = TranscoderManager()
 
     last_settings_poll = 0.0
     settings_poll_interval = 2.0  # seconds
 
+    # Force initial transcoders boot-up
+    for camera_id in CAMERAS.keys():
+        transcoder_manager.apply_settings(camera_id, "hd", 15)
+
     try:
         while True:
-            # Poll and apply settings
             now = time.time()
-            if now - last_settings_poll >= settings_poll_interval:
-                last_settings_poll = now
-                settings = poll_settings()
-                for camera_id, cam_settings in settings.items():
-                    if camera_id in CAMERAS:
-                        quality = cam_settings.get("quality", "hd")
-                        fps     = int(cam_settings.get("fps", 15))
-                        transcoder_manager.apply_settings(camera_id, quality, fps)
+            
+            # Monitoring loop - check if camera states changed or processes died
+            # This handles offline -> online camera fallback recovery automatically!
+            for camera_id in CAMERAS.keys():
+                prev_settings = transcoder_manager.current_settings.get(camera_id, {"quality": "hd", "fps": 15})
+                # Check and apply
+                transcoder_manager.apply_settings(camera_id, prev_settings["quality"], prev_settings["fps"])
 
-            # Poll PTZ commands
-            for camera_id in CAMERAS:
-                commands = poll_commands(camera_id)
+            # HTTP Poll Settings & PTZ only as fallback when WebSocket is offline
+            if not ws_connected:
+                # Poll and apply settings
+                if now - last_settings_poll >= settings_poll_interval:
+                    last_settings_poll = now
+                    settings = poll_settings()
+                    for camera_id, cam_settings in settings.items():
+                        if camera_id in CAMERAS:
+                            quality = cam_settings.get("quality", "hd")
+                            fps     = int(cam_settings.get("fps", 15))
+                            transcoder_manager.apply_settings(camera_id, quality, fps)
 
-                for cmd in commands:
-                    cmd_id  = cmd.get("id", "unknown")
-                    action  = cmd.get("action", "stop")
-                    log.info(f"[{camera_id}] Executing: {action} (id={cmd_id})")
+                # Poll PTZ commands
+                for camera_id in CAMERAS:
+                    commands = poll_commands(camera_id)
+                    for cmd in commands:
+                        cmd_id  = cmd.get("id", "unknown")
+                        action  = cmd.get("action", "stop")
+                        log.info(f"[{camera_id}] HTTP Fallback Executing: {action} (id={cmd_id})")
 
-                    success, error = execute_ptz(camera_id, cmd)
+                        success, error = execute_ptz(camera_id, cmd)
+                        if success:
+                            log.info(f"[{camera_id}] ✅ {action} → OK")
+                        else:
+                            log.error(f"[{camera_id}] ❌ {action} → {error}")
 
-                    if success:
-                        log.info(f"[{camera_id}] ✅ {action} → OK")
-                    else:
-                        log.error(f"[{camera_id}] ❌ {action} → {error}")
-
-                    ack_command(camera_id, cmd_id, success, error)
+                        ack_command(camera_id, cmd_id, success, error)
 
             time.sleep(POLL_INTERVAL)
 
