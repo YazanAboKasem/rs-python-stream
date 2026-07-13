@@ -8,11 +8,11 @@
 #   Jetson: sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good
 #           gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
 
-# No pip dependencies required for Phase 1.
-# stream.py uses only Python stdlib (subprocess, platform, signal, time, sys, os).
+# ─── Camera Control & Server Communication ──────────────────────────────────
+requests>=2.28.0       # HTTP client for ISAPI PTZ + polling fallback
+websockets>=12.0       # WebSocket client for real-time server communication
 
 # ─── Future AI phase will require: ───────────────────────────────────────────
 # opencv-python
 # numpy
-# requests          # to POST alerts to Laravel API
 # Pillow            # for snapshot encoding

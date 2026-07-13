@@ -24,6 +24,7 @@ PYTHON_SCRIPT="./stream.py"
 MEDIAMTX_PID=""
 STREAM_PID=""
 CAMERA_CTRL_PID=""
+REC_CLEANUP_PID=""
 
 # ─── Color output ─────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -37,6 +38,9 @@ err()  { echo -e "${RED}[start.sh] ERROR:${NC} $*" >&2; }
 cleanup() {
     echo ""
     log "Shutting down services..."
+    if [[ -n "$REC_CLEANUP_PID" ]] && kill -0 "$REC_CLEANUP_PID" 2>/dev/null; then
+        kill "$REC_CLEANUP_PID" 2>/dev/null && log "recording-cleanup.py stopped."
+    fi
     if [[ -n "$CAMERA_CTRL_PID" ]] && kill -0 "$CAMERA_CTRL_PID" 2>/dev/null; then
         kill "$CAMERA_CTRL_PID" 2>/dev/null && log "camera-control.py stopped."
     fi
@@ -171,6 +175,23 @@ if [[ -f "camera-control.py" ]]; then
     fi
 else
     warn "camera-control.py not found — PTZ and quality controls disabled."
+fi
+echo ""
+
+# Start recording-cleanup.py (disk space management)
+if [[ -f "recording-cleanup.py" ]]; then
+    log "Starting recording-cleanup.py (recording disk management)..."
+    python3 recording-cleanup.py > /tmp/recording-cleanup.log 2>&1 &
+    REC_CLEANUP_PID=$!
+    sleep 1
+    if kill -0 "$REC_CLEANUP_PID" 2>/dev/null; then
+        log "recording-cleanup.py running (PID: $REC_CLEANUP_PID)"
+    else
+        warn "recording-cleanup.py failed to start. Check: /tmp/recording-cleanup.log"
+        REC_CLEANUP_PID=""
+    fi
+else
+    warn "recording-cleanup.py not found — recording disk management disabled."
 fi
 echo ""
 

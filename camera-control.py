@@ -842,6 +842,15 @@ def on_message(ws, message):
     elif event == "sync.cancel":
         sync_cancelled = True
 
+    elif event == "jetson.reboot":
+        send_ws_event(ws, "jetson.reboot.ack", {"status": "rebooting"})
+        def do_reboot():
+            time.sleep(2)
+            import os
+            log.warning("⚠️ Reboot command received from server! Initiating system reboot...")
+            os.system("sudo reboot")
+        threading.Thread(target=do_reboot, daemon=True).start()
+
 
 def on_open(ws):
     global ws_connected
