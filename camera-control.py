@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 import sys
 LARAVEL_URL       = "https://controlroom.dubibid.com"
 SURVEILLANCE_TOKEN = "b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
+JETSON_NAME        = platform.node() or "jetson-default"  # default: system hostname
 
 # Allow CLI overrides (e.g. passed from connect-to-server.sh)
 for arg in sys.argv:
@@ -37,6 +38,8 @@ for arg in sys.argv:
         LARAVEL_URL = arg.split("=", 1)[1]
     elif arg.startswith("--token="):
         SURVEILLANCE_TOKEN = arg.split("=", 1)[1]
+    elif arg.startswith("--jetson-name="):
+        JETSON_NAME = arg.split("=", 1)[1]
 
 CAMERAS = {
     "cam1": {"ip": "192.168.1.64", "user": "admin", "password": "hikvision@12", "channel": 1},
@@ -146,7 +149,7 @@ def poll_settings() -> dict:
             return data.get("settings", {})
     except Exception as e:
         log.warning(f"Poll settings failed: {e}")
-    return []
+    return {}
 
 
 def ack_command(camera_id: str, command_id: str, success: bool, error: str = None):
@@ -390,7 +393,7 @@ def execute_ptz(camera_id: str, cmd: dict) -> tuple:
         return False, str(e)
 
 
-# ─── QNAP Sync File Scanner & WebDAV Uploader ────────────────────────────────
+# ─── VPS Recording Sync — File Scanner & HTTP Uploader ────────────────────────
 def create_mock_recordings(base_dir):
     """Populate mock recordings directory for testing sync pipelines."""
     today = datetime.now().date()
@@ -450,23 +453,28 @@ def get_files_to_sync(scope, cameras_filter, days_filter):
     return filtered_files
 
 
-def run_qnap_sync(ws, request_id, qnap_config, options):
-    """Upload selected files to QNAP NAS via WebDAV, or simulated upload if unreachable."""
+def run_vps_sync(ws, request_id, vps_config, options):
+    """Upload selected recording files to VPS server via HTTP multipart upload."""
     global sync_paused, sync_cancelled
     sync_paused = False
     sync_cancelled = False
 
-    host = qnap_config.get("host")
-    username = qnap_config.get("username")
-    password = qnap_config.get("password")
-    remote_path = qnap_config.get("remote_path", "/Recordings/RoadShield/")
-    protocol = qnap_config.get("protocol", "https")
-    port = qnap_config.get("port", 443)
+    upload_url = vps_config.get("upload_url")
+    upload_token = vps_config.get("token", SURVEILLANCE_TOKEN)
 
     scope = options.get("scope", "all")
     cameras = options.get("cameras", [])
     days = options.get("days")
     delete_after_upload = options.get("delete_after_upload", True)
+    overwrite = options.get("overwrite_existing", False)
+
+    if not upload_url:
+        send_ws_event(ws, "sync.start.ack", {
+            "request_id": request_id,
+            "status": "error",
+            "error": "No upload URL provided by server."
+        })
+        return
 
     try:
         files = get_files_to_sync(scope, cameras, days)
@@ -482,8 +490,7 @@ def run_qnap_sync(ws, request_id, qnap_config, options):
     total_bytes = sum(os.path.getsize(f[0]) for f in files)
     total_size_gb = round(total_bytes / (1024 * 1024 * 1024), 2)
     
-    speed_mbps = 25.4
-    estimated_seconds = (total_bytes * 8) / (speed_mbps * 1000 * 1000) if total_bytes > 0 else 0
+    estimated_seconds = (total_bytes * 8) / (25 * 1000 * 1000) if total_bytes > 0 else 0
     estimated_time_minutes = max(1, int(estimated_seconds / 60))
 
     # Start Ack
@@ -531,47 +538,37 @@ def run_qnap_sync(ws, request_id, qnap_config, options):
         upload_success = True
         error_msg = None
 
-        # Check if we should simulate (fallback for local development testing)
-        is_simulation = host == "qnap.test" or username == "test" or not ping_check(host)
+        try:
+            with open(path, 'rb') as f:
+                resp = requests.post(
+                    upload_url,
+                    files={'file': (os.path.basename(path), f, 'video/mp4')},
+                    data={
+                        'jetson_name': JETSON_NAME,
+                        'relative_path': current_file_rel,
+                        'overwrite': '1' if overwrite else '0',
+                    },
+                    headers={'Authorization': f'Bearer {upload_token}'},
+                    timeout=300,  # 5 min per file
+                    verify=False,
+                )
 
-        if is_simulation:
-            # Simulated chunked transfer progress
-            chunk_size = file_size // 5 if file_size > 0 else 0
-            for chunk_idx in range(5):
-                if sync_cancelled: break
-                while sync_paused and not sync_cancelled: time.sleep(0.5)
-                
-                time.sleep(0.2) # sleep for simulation speed
-                bytes_uploaded += chunk_size
-                
-                percent = round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0
-                elapsed = time.time() - t_start
-                eta = int((total_bytes - bytes_uploaded) / (bytes_uploaded / elapsed)) if bytes_uploaded > 0 and elapsed > 0 else 0
-                
-                send_ws_event(ws, "sync.progress", {
-                    "request_id": request_id,
-                    "files_uploaded": files_uploaded,
-                    "files_total": total_files,
-                    "bytes_uploaded": bytes_uploaded,
-                    "bytes_total": total_bytes,
-                    "current_file": current_file_rel,
-                    "speed_mbps": speed_mbps,
-                    "eta_seconds": eta,
-                    "percent": percent
-                })
-        else:
-            # Real WebDAV basic PUT logic
-            try:
-                url = f"{protocol}://{host}:{port}{remote_path}/{current_file_rel}"
-                with open(path, 'rb') as f:
-                    r = requests.put(url, data=f, auth=(username, password), timeout=15, verify=False)
-                    if r.status_code not in (200, 201, 204):
+                if resp.status_code == 200:
+                    resp_data = resp.json()
+                    if not resp_data.get('success', False):
                         upload_success = False
-                        error_msg = f"WebDAV error: HTTP {r.status_code}"
-            except Exception as e:
-                upload_success = False
-                error_msg = str(e)
-            bytes_uploaded += file_size
+                        error_msg = resp_data.get('error', 'Unknown server error')
+                else:
+                    upload_success = False
+                    error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+        except requests.exceptions.Timeout:
+            upload_success = False
+            error_msg = "Upload timed out (5 min limit)"
+        except Exception as e:
+            upload_success = False
+            error_msg = str(e)
+
+        bytes_uploaded += file_size
 
         if upload_success:
             files_uploaded += 1
@@ -587,6 +584,25 @@ def run_qnap_sync(ws, request_id, qnap_config, options):
                 "file": current_file_rel,
                 "error": error_msg
             })
+
+        # Report progress after each file
+        percent = round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0
+        elapsed = time.time() - t_start
+        speed_bps = bytes_uploaded / elapsed if elapsed > 0 else 0
+        speed_mbps = round(speed_bps * 8 / (1024 * 1024), 1)
+        eta = int((total_bytes - bytes_uploaded) / speed_bps) if speed_bps > 0 else 0
+
+        send_ws_event(ws, "sync.progress", {
+            "request_id": request_id,
+            "files_uploaded": files_uploaded,
+            "files_total": total_files,
+            "bytes_uploaded": bytes_uploaded,
+            "bytes_total": total_bytes,
+            "current_file": current_file_rel,
+            "speed_mbps": speed_mbps,
+            "eta_seconds": eta,
+            "percent": percent
+        })
 
     # Sync complete
     duration_minutes = round((time.time() - t_start) / 60, 2)
@@ -826,9 +842,9 @@ def on_message(ws, message):
 
     elif event == "sync.start":
         request_id = data.get("request_id")
-        qnap_config = data.get("qnap", {})
+        vps_config = data.get("vps", {})
         options = data.get("options", {})
-        threading.Thread(target=run_qnap_sync, args=(ws, request_id, qnap_config, options), daemon=True).start()
+        threading.Thread(target=run_vps_sync, args=(ws, request_id, vps_config, options), daemon=True).start()
 
     elif event == "sync.pause":
         sync_paused = True
@@ -860,6 +876,7 @@ def on_open(ws):
     # Send login hello frame
     send_ws_event(ws, "jetson.hello", {
         "cameras": list(CAMERAS.keys()),
+        "jetson_name": JETSON_NAME,
         "version": "2.0.0",
         "timestamp": time.time()
     })

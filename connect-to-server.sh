@@ -20,8 +20,9 @@ cd "$SCRIPT_DIR"
 # ▼  CONFIG — عدّل هذه القيم فقط عند تغيير السيرفر  ▼
 # =============================================================================
 
-LARAVEL_URL="https://controlroom.dubibid.com"
+LARAVEL_URL="https://controlroom.roadshield.ae"
 SURVEILLANCE_TOKEN="b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
+JETSON_NAME="jetson-site-1"   # unique name for this Jetson device (used for recording storage)
 
 HLS_PORT=8888
 MEDIAMTX_BIN="./mediamtx"
@@ -89,6 +90,7 @@ clear_tunnel() {
 
 # ─── Cleanup on Ctrl+C ───────────────────────────────────────────────────────
 cleanup() {
+    local exit_code="${1:-0}"
     echo ""
     log "إيقاف النظام..."
     clear_tunnel
@@ -96,7 +98,7 @@ cleanup() {
     [[ -n "$TUNNEL_PID"      ]] && kill "$TUNNEL_PID"      2>/dev/null && log "Cloudflare Tunnel متوقف."
     [[ -n "$MEDIAMTX_PID"   ]] && kill "$MEDIAMTX_PID"   2>/dev/null && log "MediaMTX متوقف."
     log "تم الإيقاف بنجاح."
-    exit 0
+    exit "$exit_code"
 }
 trap cleanup INT TERM
 
@@ -169,7 +171,7 @@ log "MediaMTX يعمل (PID: $MEDIAMTX_PID)"
 # ─── 1b. Start camera-control.py (PTZ agent) ─────────────────────────────────
 if command -v python3 &>/dev/null && [[ -f "camera-control.py" ]]; then
     log "تشغيل camera-control.py (PTZ agent)..."
-    python3 camera-control.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" > /tmp/camera-control.log 2>&1 &
+    python3 camera-control.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" --jetson-name="$JETSON_NAME" > /tmp/camera-control.log 2>&1 &
     CAMERA_CTRL_PID=$!
     sleep 1
     if kill -0 "$CAMERA_CTRL_PID" 2>/dev/null; then
@@ -231,9 +233,10 @@ kill "$TAIL_PID" 2>/dev/null || true
 wait "$TAIL_PID" 2>/dev/null || true
 
 if [[ -z "$TUNNEL_URL" ]]; then
-    warn "تعذّر استلام URL تلقائياً."
-    warn "تحقق من: $TUNNEL_LOG"
-    warn "شغّل يدوياً وأضف URL للـ .env على السيرفر"
+    err "❌ تعذّر استلام URL تلقائياً (ربما بسبب انقطاع الإنترنت أو DNS)."
+    err "تحقق من: $TUNNEL_LOG"
+    err "سيتم إيقاف السكريبت لتتمكن خدمة systemd من إعادة المحاولة لاحقاً..."
+    cleanup 1
 else
     # ─── 3. Register URL with Laravel API ─────────────────────────────────────
     echo ""
@@ -255,4 +258,6 @@ log "النظام يعمل. اضغط Ctrl+C للإيقاف."
 echo ""
 
 # Wait for either process to exit
-wait "$MEDIAMTX_PID" "$TUNNEL_PID"
+wait -n "$MEDIAMTX_PID" "$TUNNEL_PID" || true
+warn "أحد البرامج الأساسية توقف عن العمل (MediaMTX أو Cloudflare). جاري إعادة التشغيل..."
+cleanup 1
