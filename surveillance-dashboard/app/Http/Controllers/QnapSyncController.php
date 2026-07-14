@@ -46,8 +46,14 @@ class QnapSyncController extends Controller
         $requestId = 'sync_' . uniqid();
 
         // Build VPS upload config — the Jetson will use this to upload files
+        // Fall back to the request URL's scheme and host if app.url is localhost or empty
+        $baseUrl = rtrim(config('app.url'), '/');
+        if (str_contains($baseUrl, 'localhost') || empty($baseUrl)) {
+            $baseUrl = $request->getSchemeAndHttpHost();
+        }
+
         $vpsConfig = [
-            'upload_url' => rtrim(config('app.url'), '/') . '/api/surveillance/recordings/upload',
+            'upload_url' => $baseUrl . '/api/surveillance/recordings/upload',
             'token' => config('surveillance.api_token'),
         ];
 

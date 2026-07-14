@@ -59,5 +59,6 @@ Route::post('/surveillance/sync/cancel/{requestId}',   [QnapSyncController::clas
 // ── Recording Upload & Browse (VPS Storage) ─────────────────────────────────
 Route::post('/surveillance/recordings/upload',                      [RecordingUploadController::class, 'upload']);
 Route::get('/surveillance/recordings/browse/{jetsonName?}',         [RecordingUploadController::class, 'browse']);
+Route::post('/surveillance/recordings/download-complete',           [RecordingUploadController::class, 'downloadComplete']);
 Route::get('/surveillance/recordings/download/{jetsonName}/{path}', [RecordingUploadController::class, 'download'])
     ->where('path', '.*');

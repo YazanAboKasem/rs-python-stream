@@ -206,6 +206,68 @@ class RecordingUploadController extends Controller
     }
 
     /**
+     * POST /api/surveillance/recordings/download-complete
+     *
+     * Called by the QNAP agent when it has successfully downloaded and verified a recording.
+     * Deletes the local recording copy from the VPS storage to free up disk space.
+     */
+    public function downloadComplete(Request $request): JsonResponse
+    {
+        if (! $this->isAuthorized($request)) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        $request->validate([
+            'jetson_name' => 'required|string|max:100|regex:/^[a-zA-Z0-9_-]+$/',
+            'relative_path' => 'required|string|max:500',
+        ]);
+
+        $jetsonName = $request->input('jetson_name');
+        $relativePath = $request->input('relative_path');
+
+        // Sanitize relative_path to prevent directory traversal
+        $relativePath = str_replace(['..', "\0"], '', $relativePath);
+        $relativePath = ltrim($relativePath, '/');
+
+        $basePath = $this->getRecordingsBasePath();
+        $fullPath = "{$basePath}/{$jetsonName}/{$relativePath}";
+
+        if (! File::exists($fullPath)) {
+            return response()->json([
+                'success' => false,
+                'error' => 'File not found on server.',
+            ], 404);
+        }
+
+        try {
+            File::delete($fullPath);
+            Log::info("[RecordingUpload] Deleted after QNAP sync: {$jetsonName}/{$relativePath}");
+
+            // Clean up empty directories up to the base recordings path
+            $dir = dirname($fullPath);
+            while ($dir !== $basePath && File::isDirectory($dir) && count(File::allFiles($dir)) === 0) {
+                // Ensure we don't delete directories above the base path
+                if (strlen($dir) <= strlen($basePath)) {
+                    break;
+                }
+                File::deleteDirectory($dir);
+                $dir = dirname($dir);
+            }
+
+            return response()->json([
+                'success' => true,
+                'message' => 'File deleted successfully on VPS.',
+            ]);
+        } catch (\Exception $e) {
+            Log::error("[RecordingUpload] Failed to delete file: {$e->getMessage()}");
+            return response()->json([
+                'success' => false,
+                'error' => 'Failed to delete file: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * Helper: recursive directory size
      */
     private function getDirectorySize(string $path): int

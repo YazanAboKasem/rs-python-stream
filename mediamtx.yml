@@ -21,12 +21,17 @@ webrtcAllowOrigin: "*"
 srt: no
 rtmp: no
 
+# ── Recording Configuration ───────────────────────────────────────────────────
+record: no
+recordPath: ./recordings/%path/%Y-%m-%d/%H-%M-%S
+recordFormat: fmp4
 
 paths:
   # ── Camera 1 — 192.168.1.64 ─────────────────────────────────────────────
   cam1:                           # HD  ~2-6 Mbps  (1080p/720p full FPS)
     source: rtsp://admin:hikvision%4012@192.168.1.64:554/Streaming/Channels/101
     sourceProtocol: tcp
+    record: yes
 
   cam1_sub:                       # SD  ~300-800 Kbps  (sub stream from camera)
     source: rtsp://admin:hikvision%4012@192.168.1.64:554/Streaming/Channels/102
@@ -36,6 +41,7 @@ paths:
   cam2:                           # HD  ~2-6 Mbps
     source: rtsp://admin:hikvision%4012@192.168.1.65:554/Streaming/Channels/101
     sourceProtocol: tcp
+    record: yes
 
   cam2_sub:                       # SD  ~300-800 Kbps
     source: rtsp://admin:hikvision%4012@192.168.1.65:554/Streaming/Channels/102
@@ -45,6 +51,7 @@ paths:
   cam3:                           # HD  ~2-6 Mbps
     source: rtsp://admin:hikvision%4012@192.168.1.67:554/Streaming/Channels/101
     sourceProtocol: tcp
+    record: yes
 
   cam3_sub:                       # SD  ~300-800 Kbps
     source: rtsp://admin:hikvision%4012@192.168.1.67:554/Streaming/Channels/102

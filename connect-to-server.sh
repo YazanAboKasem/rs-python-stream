@@ -34,6 +34,7 @@ TUNNEL_LOG="/tmp/cloudflared-mediamtx.log"
 MEDIAMTX_PID=""
 TUNNEL_PID=""
 CAMERA_CTRL_PID=""
+REC_CLEANUP_PID=""
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'
@@ -94,6 +95,7 @@ cleanup() {
     echo ""
     log "إيقاف النظام..."
     clear_tunnel
+    [[ -n "$REC_CLEANUP_PID" ]] && kill "$REC_CLEANUP_PID" 2>/dev/null && log "recording-cleanup.py متوقف."
     [[ -n "$CAMERA_CTRL_PID" ]] && kill "$CAMERA_CTRL_PID" 2>/dev/null && log "camera-control.py متوقف."
     [[ -n "$TUNNEL_PID"      ]] && kill "$TUNNEL_PID"      2>/dev/null && log "Cloudflare Tunnel متوقف."
     [[ -n "$MEDIAMTX_PID"   ]] && kill "$MEDIAMTX_PID"   2>/dev/null && log "MediaMTX متوقف."
@@ -182,6 +184,23 @@ if command -v python3 &>/dev/null && [[ -f "camera-control.py" ]]; then
     fi
 else
     warn "camera-control.py غير موجود أو python3 غير متاح — PTZ غير مفعّل."
+fi
+echo ""
+
+# ─── 1c. Start recording-cleanup.py (recording disk management) ──────────────
+if command -v python3 &>/dev/null && [[ -f "recording-cleanup.py" ]]; then
+    log "تشغيل recording-cleanup.py (حجم التسجيلات)..."
+    python3 recording-cleanup.py > /tmp/recording-cleanup.log 2>&1 &
+    REC_CLEANUP_PID=$!
+    sleep 1
+    if kill -0 "$REC_CLEANUP_PID" 2>/dev/null; then
+        log "recording-cleanup.py يعمل (PID: $REC_CLEANUP_PID)"
+    else
+        warn "recording-cleanup.py فشل في التشغيل. تحقق من: /tmp/recording-cleanup.log"
+        REC_CLEANUP_PID=""
+    fi
+else
+    warn "recording-cleanup.py غير موجود — إدارة القرص غير مفعّلة."
 fi
 echo ""
 
