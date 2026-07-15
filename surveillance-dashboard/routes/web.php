@@ -27,3 +27,10 @@ Route::get('/surveillance/devices', [SurveillanceController::class, 'devices'])
 // Device settings page
 Route::get('/surveillance/devices/{deviceId}', [SurveillanceController::class, 'deviceSettings'])
     ->name('surveillance.device-settings');
+
+// Remote Terminal Sessions
+Route::post('/surveillance/devices/{deviceId}/terminal/request', [\App\Http\Controllers\DeviceAgentController::class, 'requestTerminal'])
+    ->name('surveillance.device-terminal.request');
+Route::get('/surveillance/devices/{deviceId}/terminal/status', [\App\Http\Controllers\DeviceAgentController::class, 'terminalStatus'])
+    ->name('surveillance.device-terminal.status');
+

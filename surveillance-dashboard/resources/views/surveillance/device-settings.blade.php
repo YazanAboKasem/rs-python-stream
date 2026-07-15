@@ -84,6 +84,68 @@
                     <button class="sv-btn sv-btn-danger" id="reboot-jetson-btn" onclick="rebootJetson()" style="display:inline-flex;align-items:center;gap:8px">
                         <i class="bi bi-power"></i> Restart Jetson
                     </button>
+                    <button class="sv-btn sv-btn-accent" id="access-terminal-btn" onclick="requestTerminalSession()" style="display:inline-flex;align-items:center;gap:8px">
+                        <i class="bi bi-terminal-fill"></i> Access Terminal
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Remote Terminal Session Panel -->
+    <div id="sv-terminal-panel" class="sv-sync-panel hidden" style="border-color: var(--accent);">
+        <div class="sv-panel-header">
+            <div class="sv-panel-header-title">
+                <i class="bi bi-terminal-fill pulse" style="color:var(--accent)"></i>
+                <span>Remote SSH Terminal Access</span>
+            </div>
+            <div class="sv-panel-header-actions">
+                <button class="sv-btn sv-btn-danger" id="terminal-close-btn" onclick="terminateTerminalSession()">
+                    <i class="bi bi-x-circle-fill"></i> Close Session
+                </button>
+            </div>
+        </div>
+
+        <div class="sv-panel-body-sub" style="padding: 20px;">
+            <!-- Status messages -->
+            <div id="terminal-status-container" style="display:flex;flex-direction:column;gap:12px;">
+                <div class="sv-current-file-box" style="align-items:center;gap:12px;">
+                    <div class="sv-spinner-sm" id="terminal-status-spinner"></div>
+                    <span class="sv-label" style="min-width:auto">Status:</span>
+                    <span id="terminal-status-text" class="mono" style="color:var(--text-primary)">Requesting terminal session...</span>
+                </div>
+
+                <!-- Ready Connection details -->
+                <div id="terminal-connection-details" class="hidden" style="display:flex;flex-direction:column;gap:12px;">
+                    <div style="background:var(--surface-2);border-radius:8px;padding:16px;border:1px solid var(--border)">
+                        <div class="sv-label" style="margin-bottom:8px">1. SSH Command (Copy and run in your terminal):</div>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <input type="text" id="terminal-connection-string" class="sv-input" style="flex:1;font-family:var(--font-mono);font-size:12px;" readonly>
+                            <button class="sv-btn sv-btn-secondary" onclick="copyConnectionString()" title="Copy to clipboard">
+                                <i class="bi bi-clipboard"></i> Copy
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="sv-sync-stats-grid">
+                        <div class="sv-sync-stat-box">
+                            <span class="sv-sync-stat-label">Timeout</span>
+                            <span class="sv-sync-stat-val" id="terminal-stat-time">10:00</span>
+                        </div>
+                        <div class="sv-sync-stat-box">
+                            <span class="sv-sync-stat-label">Remote Port</span>
+                            <span class="sv-sync-stat-val mono" id="terminal-stat-port">-</span>
+                        </div>
+                        <div class="sv-sync-stat-box">
+                            <span class="sv-sync-stat-label">Security</span>
+                            <span class="sv-sync-stat-val" style="color:var(--green);font-size:12px">Key Auth Only</span>
+                        </div>
+                    </div>
+
+                    <div style="background:rgba(255, 171, 64, 0.08);border:1px solid rgba(255,171,64,0.2);border-radius:8px;padding:12px 16px;font-size:12px;color:var(--text-secondary);line-height:1.5">
+                        <i class="bi bi-info-circle-fill" style="color:var(--amber);margin-right:6px"></i>
+                        <span>This is a reverse SSH tunnel. The port will close automatically once the timer expires. Your local SSH key must be authorized on the control room server.</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -123,8 +185,10 @@
     {{-- HLS.js — browser HLS player --}}
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
 
-    {{-- Stream player + diagnostics + sync --}}
+    {{-- Stream player + diagnostics + sync + terminal --}}
     <script src="{{ asset('js/stream-player.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
     <script src="{{ asset('js/diagnostic.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
     <script src="{{ asset('js/qnap-sync.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
+    <script src="{{ asset('js/terminal.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
 @endpush
+

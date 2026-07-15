@@ -62,3 +62,11 @@ Route::get('/surveillance/recordings/browse/{jetsonName?}',         [RecordingUp
 Route::post('/surveillance/recordings/download-complete',           [RecordingUploadController::class, 'downloadComplete']);
 Route::get('/surveillance/recordings/download/{jetsonName}/{path}', [RecordingUploadController::class, 'download'])
     ->where('path', '.*');
+
+// ── Remote Device Agent API Endpoints ─────────────────────────────────────────
+Route::post('/device-agent/heartbeat',        [\App\Http\Controllers\DeviceAgentController::class, 'heartbeat']);
+Route::get('/device-agent/pending-commands',  [\App\Http\Controllers\DeviceAgentController::class, 'pendingCommands']);
+Route::post('/device-agent/command-result',   [\App\Http\Controllers\DeviceAgentController::class, 'commandResult']);
+Route::post('/device-agent/terminal-ready',   [\App\Http\Controllers\DeviceAgentController::class, 'terminalReady']);
+Route::post('/device-agent/terminal-closed',  [\App\Http\Controllers\DeviceAgentController::class, 'terminalClosed']);
+
