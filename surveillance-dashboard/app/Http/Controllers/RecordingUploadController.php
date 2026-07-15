@@ -145,10 +145,17 @@ class RecordingUploadController extends Controller
                 $files = [];
 
                 foreach (File::files($dateDir) as $file) {
+                    $realPath = $file->getRealPath();
+                    $cacheKey = "rec_sha256_" . md5($realPath . '_' . $file->getMTime());
+                    $sha256 = \Illuminate\Support\Facades\Cache::rememberForever($cacheKey, function () use ($realPath) {
+                        return hash_file('sha256', $realPath);
+                    });
+
                     $files[] = [
                         'name' => $file->getFilename(),
                         'size_bytes' => $file->getSize(),
                         'size_mb' => round($file->getSize() / (1024 * 1024), 1),
+                        'sha256' => $sha256,
                         'modified' => date('Y-m-d H:i:s', $file->getMTime()),
                         'download_url' => "/api/surveillance/recordings/download/{$jetsonName}/{$camId}/{$date}/{$file->getFilename()}",
                     ];

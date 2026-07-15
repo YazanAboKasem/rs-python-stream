@@ -16,12 +16,14 @@ use Illuminate\Support\Facades\Route;
 // Redirect root to surveillance dashboard
 Route::get('/', fn () => redirect()->route('surveillance.index'));
 
-// Main surveillance dashboard
+// Main surveillance dashboard (monitoring room — all streams)
 Route::get('/surveillance', [SurveillanceController::class, 'index'])
     ->name('surveillance.index');
 
-// Future API routes (Phase 2/3):
-// Route::post('/api/surveillance/events', [SurveillanceController::class, 'receiveEvent'])
-//     ->name('surveillance.events')
-//     ->middleware('throttle:60,1');
+// Devices management page
+Route::get('/surveillance/devices', [SurveillanceController::class, 'devices'])
+    ->name('surveillance.devices');
 
+// Device settings page
+Route::get('/surveillance/devices/{deviceId}', [SurveillanceController::class, 'deviceSettings'])
+    ->name('surveillance.device-settings');
