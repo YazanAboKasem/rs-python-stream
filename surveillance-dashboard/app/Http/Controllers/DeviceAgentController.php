@@ -243,14 +243,21 @@ class DeviceAgentController extends Controller
             return response()->json(['status' => 'none']);
         }
 
-        // Handle auto-expiration calculation
-        if (in_array($session->status, ['requested', 'open']) && $session->expires_at && $session->expires_at->isPast()) {
-            $session->update(['status' => 'expired', 'closed_at' => now()]);
-        }
-
+        // 1. Timezone-independent expiration checks
         $remainingSeconds = 0;
-        if ($session->status === 'open' && $session->expires_at) {
-            $remainingSeconds = max(0, $session->expires_at->diffInSeconds(now()));
+
+        if ($session->status === 'requested') {
+            $elapsed = now()->diffInSeconds($session->created_at);
+            if ($elapsed > 300) { // 5 minutes limit for agent to pickup
+                $session->update(['status' => 'expired', 'closed_at' => now()]);
+            }
+        } 
+        elseif ($session->status === 'open' && $session->opened_at) {
+            $elapsed = now()->diffInSeconds($session->opened_at);
+            $remainingSeconds = max(0, ($session->timeout_minutes * 60) - $elapsed);
+            if ($remainingSeconds <= 0) {
+                $session->update(['status' => 'expired', 'closed_at' => now()]);
+            }
         }
 
         return response()->json([
