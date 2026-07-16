@@ -903,14 +903,26 @@ def on_message(ws, message):
         try:
             files = get_files_to_sync(scope, cameras, days)
             log.info(f"[WS] Found {len(files)} files to scan.")
-            files_data = []
-            for path, rel_path in files:
-                duration = get_video_duration(path)
-                files_data.append({
+            
+            from concurrent.futures import ThreadPoolExecutor
+            
+            def process_file(file_info):
+                path, rel_path = file_info
+                try:
+                    size = os.path.getsize(path)
+                    duration = get_video_duration(path)
+                except Exception:
+                    size = 0
+                    duration = 0
+                return {
                     "name": rel_path.replace(os.sep, '/'),
-                    "size": os.path.getsize(path),
+                    "size": size,
                     "duration": duration
-                })
+                }
+
+            with ThreadPoolExecutor(max_workers=24) as executor:
+                files_data = list(executor.map(process_file, files))
+
             log.info(f"[WS] Sending sync.list_files.ack with {len(files_data)} files.")
             send_ws_event(ws, "sync.list_files.ack", {
                 "request_id": request_id,
