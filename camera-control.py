@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 import sys
 LARAVEL_URL       = "https://controlroom.dubibid.com"
 SURVEILLANCE_TOKEN = "b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
-JETSON_NAME        = platform.node() or "jetson-default"  # default: system hostname
+JETSON_NAME        = platform.node() or "jetson-1"  # default: system hostname
 
 # Allow CLI overrides (e.g. passed from connect-to-server.sh)
 for arg in sys.argv:
@@ -411,6 +411,28 @@ def create_mock_recordings(base_dir):
                     except Exception:
                         pass
 
+def get_video_duration(path):
+    """Retrieve video duration using ffprobe. Fallback to mock duration if empty/test file."""
+    try:
+        import subprocess
+        cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1.5)
+        duration_str = result.stdout.strip()
+        if duration_str:
+            return round(float(duration_str))
+    except Exception:
+        pass
+    try:
+        if os.path.getsize(path) <= 1024 * 1024:
+            return 3600  # Default mock duration: 1 hour
+    except Exception:
+        pass
+    return 0
+
+
 def get_files_to_sync(scope, cameras_filter, days_filter):
     """Scan the recordings/ directory and filter files based on sync parameters."""
     base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
@@ -477,7 +499,16 @@ def run_vps_sync(ws, request_id, vps_config, options):
         return
 
     try:
-        files = get_files_to_sync(scope, cameras, days)
+        files_filter = options.get("files")
+        if files_filter:
+            base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+            files = []
+            for rel_path in files_filter:
+                full_path = os.path.join(base_dir, rel_path)
+                if os.path.exists(full_path):
+                    files.append((full_path, rel_path))
+        else:
+            files = get_files_to_sync(scope, cameras, days)
     except Exception as e:
         send_ws_event(ws, "sync.start.ack", {
             "request_id": request_id,
@@ -861,6 +892,38 @@ def on_message(ws, message):
         vps_config = data.get("vps", {})
         options = data.get("options", {})
         threading.Thread(target=run_vps_sync, args=(ws, request_id, vps_config, options), daemon=True).start()
+
+    elif event == "sync.list_files":
+        request_id = data.get("request_id")
+        options = data.get("options", {})
+        scope = options.get("scope", "all")
+        cameras = options.get("cameras", [])
+        days = options.get("days")
+        log.info(f"[WS] Scanning files for sync request: {request_id} (scope={scope})")
+        try:
+            files = get_files_to_sync(scope, cameras, days)
+            log.info(f"[WS] Found {len(files)} files to scan.")
+            files_data = []
+            for path, rel_path in files:
+                duration = get_video_duration(path)
+                files_data.append({
+                    "name": rel_path.replace(os.sep, '/'),
+                    "size": os.path.getsize(path),
+                    "duration": duration
+                })
+            log.info(f"[WS] Sending sync.list_files.ack with {len(files_data)} files.")
+            send_ws_event(ws, "sync.list_files.ack", {
+                "request_id": request_id,
+                "status": "success",
+                "files": files_data
+            })
+        except Exception as e:
+            log.error(f"[WS] File scan failed: {e}")
+            send_ws_event(ws, "sync.list_files.ack", {
+                "request_id": request_id,
+                "status": "error",
+                "error": str(e)
+            })
 
     elif event == "sync.pause":
         sync_paused = True

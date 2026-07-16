@@ -22,7 +22,7 @@ cd "$SCRIPT_DIR"
 
 LARAVEL_URL="https://controlroom.roadshield.ae"
 SURVEILLANCE_TOKEN="b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
-JETSON_NAME="jetson-site-1"   # unique name for this Jetson device (used for recording storage)
+JETSON_NAME="jetson-1"   # unique name for this Jetson device (used for recording storage)
 
 HLS_PORT=8888
 MEDIAMTX_BIN="./mediamtx"
