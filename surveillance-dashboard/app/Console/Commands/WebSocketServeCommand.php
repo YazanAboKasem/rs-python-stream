@@ -91,12 +91,33 @@ class WebSocketServeCommand extends Command
         // Periodic timer for heartbeat checks (every 5 seconds)
         Loop::addPeriodicTimer(5.0, function () {
             try {
-                $isOnline = Cache::get('jetson_ws_online', false);
-                if ($isOnline) {
-                    $lastHeartbeat = Cache::get('jetson_ws_last_heartbeat');
-                    if ($lastHeartbeat && (now()->timestamp - $lastHeartbeat > 60)) {
-                        Cache::put('jetson_ws_online', false, 86400);
-                        Log::info("[WebSocket] Jetson marked offline due to heartbeat timeout (>60s)");
+                $devices = config('surveillance.devices', []);
+                $deviceIds = collect($devices)->pluck('id')->toArray();
+                if (empty($deviceIds)) {
+                    $deviceIds = ['jetson-1']; // Fallback
+                }
+
+                foreach ($deviceIds as $deviceId) {
+                    $isOnline = Cache::get("jetson_ws_online_{$deviceId}", false);
+                    if ($isOnline) {
+                        $lastHeartbeat = Cache::get("jetson_ws_last_heartbeat_{$deviceId}");
+                        if ($lastHeartbeat && (now()->timestamp - $lastHeartbeat > 60)) {
+                            Cache::put("jetson_ws_online_{$deviceId}", false, 86400);
+                            Cache::put('jetson_ws_online', false, 86400); // legacy fallback
+                            Log::info("[WebSocket] Jetson {$deviceId} marked offline due to heartbeat timeout (>60s)");
+                            
+                            // Log shutdown in DB
+                            try {
+                                \App\Models\DevicePowerLog::where('device_id', $deviceId)
+                                    ->whereNull('stopped_at')
+                                    ->update([
+                                        'stopped_at' => \Carbon\Carbon::createFromTimestamp($lastHeartbeat),
+                                        'reason' => 'Heartbeat timeout',
+                                    ]);
+                            } catch (\Exception $ex) {
+                                Log::error("[WebSocket] Failed to record heartbeat timeout shutdown for {$deviceId}: " . $ex->getMessage());
+                            }
+                        }
                     }
                 }
             } catch (\Exception $e) {

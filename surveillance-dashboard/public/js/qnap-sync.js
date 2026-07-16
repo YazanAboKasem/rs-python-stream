@@ -8,6 +8,7 @@
     let syncInterval = null;
     let currentSyncId = null;
     let syncState = 'stopped'; // stopped, syncing, paused, completed, error
+    let filesList = null;
 
     /**
      * Open Sync Modal
@@ -119,6 +120,13 @@
             // Set Pause label correctly
             document.getElementById('sync-pause-btn').innerHTML = `<i class="bi bi-pause-fill"></i> Pause`;
             syncState = 'syncing';
+            
+            // Reset files list
+            filesList = null;
+            const scrollContainer = document.getElementById('sync-files-list-scroll');
+            if (scrollContainer) {
+                scrollContainer.innerHTML = `<div style="color: var(--text-muted); text-align: center;">Initializing file list...</div>`;
+            }
         }
     }
 
@@ -155,6 +163,11 @@
             if (data.start_ack && data.start_ack.status === 'error') {
                 handleSyncError(data.start_ack.error);
                 return;
+            }
+
+            // Capture files list
+            if (data.start_ack && data.start_ack.files_list && !filesList) {
+                filesList = data.start_ack.files_list;
             }
 
             // Handle progress updates
@@ -195,6 +208,42 @@
         document.getElementById('sync-stat-eta').textContent = etaText;
 
         document.getElementById('sync-current-file').textContent = p.current_file || 'None';
+
+        // Update scroll container with file queue status
+        if (filesList && filesList.length > 0) {
+            const scrollContainer = document.getElementById('sync-files-list-scroll');
+            if (scrollContainer) {
+                const currentFile = p.current_file;
+                const currentIndex = filesList.indexOf(currentFile);
+                
+                // Get the list of failed file names
+                const failedFileNames = (p.failed_files || []).map(ff => ff.file);
+                
+                scrollContainer.innerHTML = filesList.map((filename, idx) => {
+                    let statusHtml = '';
+                    let itemStyle = 'display:flex; justify-content:space-between; align-items:center; padding: 4px 8px; border-radius: 4px;';
+                    
+                    if (failedFileNames.includes(filename)) {
+                        statusHtml = `<span style="color:var(--red); font-weight:bold;"><i class="bi bi-x-circle-fill"></i> Failed</span>`;
+                        itemStyle += 'background: rgba(239, 83, 80, 0.1); border: 1px solid rgba(239, 83, 80, 0.2);';
+                    } else if (filename === currentFile) {
+                        statusHtml = `<span style="color:var(--accent); font-weight:bold;"><i class="bi bi-arrow-repeat" style="display:inline-block; animation:sv-spin 1s linear infinite;"></i> Syncing...</span>`;
+                        itemStyle += 'background: rgba(255, 171, 64, 0.1); border: 1px solid rgba(255, 171, 64, 0.2);';
+                    } else if (currentIndex !== -1 && idx < currentIndex) {
+                        statusHtml = `<span style="color:var(--green); font-weight:bold;"><i class="bi bi-check-circle-fill"></i> Synced</span>`;
+                        itemStyle += 'background: rgba(76, 175, 80, 0.15); border: 1px solid rgba(76, 175, 80, 0.2);';
+                    } else {
+                        statusHtml = `<span style="color:var(--text-muted);"><i class="bi bi-hourglass-split"></i> Pending</span>`;
+                        itemStyle += 'opacity: 0.6;';
+                    }
+                    
+                    return `<div style="${itemStyle}">
+                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%;" title="${filename}">${filename}</span>
+                        ${statusHtml}
+                    </div>`;
+                }).join('');
+            }
+        }
     }
 
     /**
@@ -291,6 +340,32 @@
             failedUl.innerHTML = c.failed_files.map(f => `<li><span class="file">${f.file}</span>: <span class="reason">${f.error}</span></li>`).join('');
         } else {
             failedList.classList.add('hidden');
+        }
+
+        // Update files list one last time on complete
+        if (filesList && filesList.length > 0) {
+            const scrollContainer = document.getElementById('sync-files-list-scroll');
+            if (scrollContainer) {
+                const failedFileNames = (c.failed_files || []).map(ff => ff.file);
+                
+                scrollContainer.innerHTML = filesList.map((filename) => {
+                    let statusHtml = '';
+                    let itemStyle = 'display:flex; justify-content:space-between; align-items:center; padding: 4px 8px; border-radius: 4px;';
+                    
+                    if (failedFileNames.includes(filename)) {
+                        statusHtml = `<span style="color:var(--red); font-weight:bold;"><i class="bi bi-x-circle-fill"></i> Failed</span>`;
+                        itemStyle += 'background: rgba(239, 83, 80, 0.1); border: 1px solid rgba(239, 83, 80, 0.2);';
+                    } else {
+                        statusHtml = `<span style="color:var(--green); font-weight:bold;"><i class="bi bi-check-circle-fill"></i> Synced</span>`;
+                        itemStyle += 'background: rgba(76, 175, 80, 0.15); border: 1px solid rgba(76, 175, 80, 0.2);';
+                    }
+                    
+                    return `<div style="${itemStyle}">
+                        <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:70%;" title="${filename}">${filename}</span>
+                        ${statusHtml}
+                    </div>`;
+                }).join('');
+            }
         }
     }
 

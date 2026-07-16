@@ -41,7 +41,22 @@ class SurveillanceController extends Controller
             abort(404, "Device {$deviceId} not found");
         }
 
-        return view('surveillance.device-settings', compact('device', 'devices'));
+        // Fetch last 10 power logs for this device, formatting started/stopped times in UAE timezone
+        $powerLogs = \App\Models\DevicePowerLog::where('device_id', $deviceId)
+            ->orderBy('started_at', 'desc')
+            ->limit(10)
+            ->get()
+            ->map(function($log) {
+                $started = $log->started_at ? $log->started_at->timezone('Asia/Dubai')->format('Y-m-d H:i:s') : '—';
+                $stopped = $log->stopped_at ? $log->stopped_at->timezone('Asia/Dubai')->format('Y-m-d H:i:s') : 'Active Now';
+                return [
+                    'started_at' => $started,
+                    'stopped_at' => $stopped,
+                    'reason' => $log->reason ?? '—',
+                ];
+            });
+
+        return view('surveillance.device-settings', compact('device', 'devices', 'powerLogs'));
     }
 
     /**
@@ -153,5 +168,91 @@ class SurveillanceController extends Controller
         }
 
         return "http://{$host}:{$port}";
+    }
+
+    /**
+     * Display the uploaded recordings browser.
+     */
+    public function recordings(): View
+    {
+        $basePath = storage_path('app/recordings');
+        $devicesList = [];
+
+        if (\Illuminate\Support\Facades\File::isDirectory($basePath)) {
+            foreach (\Illuminate\Support\Facades\File::directories($basePath) as $deviceDir) {
+                $deviceName = basename($deviceDir);
+                $camerasList = [];
+
+                foreach (\Illuminate\Support\Facades\File::directories($deviceDir) as $camDir) {
+                    $camId = basename($camDir);
+                    $datesList = [];
+
+                    foreach (\Illuminate\Support\Facades\File::directories($camDir) as $dateDir) {
+                        $date = basename($dateDir);
+                        $files = [];
+
+                        foreach (\Illuminate\Support\Facades\File::files($dateDir) as $file) {
+                            $filename = $file->getFilename();
+                            $files[] = [
+                                'name' => $filename,
+                                'size' => round($file->getSize() / (1024 * 1024), 2) . ' MB',
+                                'play_url' => route('surveillance.recordings.play', [
+                                    'jetsonName' => $deviceName,
+                                    'path' => "{$camId}/{$date}/{$filename}"
+                                ]),
+                            ];
+                        }
+
+                        if (!empty($files)) {
+                            usort($files, fn($a, $b) => strcmp($b['name'], $a['name']));
+                            $datesList[] = [
+                                'date' => $date,
+                                'files' => $files
+                            ];
+                        }
+                    }
+
+                    if (!empty($datesList)) {
+                        usort($datesList, fn($a, $b) => strcmp($b['date'], $a['date']));
+                        $camerasList[] = [
+                            'camera_id' => $camId,
+                            'dates' => $datesList
+                        ];
+                    }
+                }
+
+                if (!empty($camerasList)) {
+                    $devicesList[] = [
+                        'device_id' => $deviceName,
+                        'cameras' => $camerasList
+                    ];
+                }
+            }
+        }
+
+        $devices = $this->resolveAllDevices();
+
+        return view('surveillance.recordings', [
+            'uploadedDevices' => $devicesList,
+            'devices' => $devices
+        ]);
+    }
+
+    /**
+     * Play/stream a specific recording file directly.
+     */
+    public function playVideo(string $jetsonName, string $path)
+    {
+        $path = str_replace(['..', "\0"], '', $path);
+        $basePath = storage_path('app/recordings');
+        $fullPath = "{$basePath}/{$jetsonName}/{$path}";
+
+        if (!\Illuminate\Support\Facades\File::exists($fullPath)) {
+            abort(404, "Recording not found");
+        }
+
+        return response()->file($fullPath, [
+            'Content-Type' => 'video/mp4',
+        ]);
     }
 }

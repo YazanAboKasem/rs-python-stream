@@ -45,6 +45,14 @@
             <span class="sv-current-file-val" id="sync-current-file">None</span>
         </div>
 
+        <!-- Files List Queue -->
+        <div id="sync-files-list-box" class="sv-report-box" style="margin-top: 16px; padding: 12px 16px;">
+            <h5 style="margin: 0 0 10px 0; color: var(--text-muted); font-size: 13px;">File Transfer Queue:</h5>
+            <div id="sync-files-list-scroll" style="max-height: 150px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; font-family: var(--font-mono); font-size: 12px; border: 1px solid var(--border); padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.15);">
+                <div style="color: var(--text-muted); text-align: center;">Initializing file list...</div>
+            </div>
+        </div>
+
         <!-- Error/Complete Report -->
         <div id="sync-completion-report" class="sv-report-box hidden">
             <h4 class="sv-report-title" id="sync-report-title">Sync Complete</h4>

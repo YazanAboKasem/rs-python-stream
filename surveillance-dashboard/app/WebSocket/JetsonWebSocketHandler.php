@@ -61,6 +61,11 @@ class JetsonWebSocketHandler
     public function handleDisconnect($connId)
     {
         Log::info("[WebSocket] Connection closed: {$connId}");
+        
+        $deviceId = $this->connections[$connId]['device_id'] ?? 'jetson-1';
+        $this->recordShutdown($deviceId, 'Normal disconnect');
+        Cache::put("jetson_ws_online_{$deviceId}", false, 86400);
+
         unset($this->connections[$connId]);
 
         // If no active connections left, mark Jetson offline
@@ -265,16 +270,35 @@ class JetsonWebSocketHandler
 
         switch ($event) {
             case 'jetson.hello':
+                $deviceId = $data['jetson_name'] ?? 'jetson-1';
+                if (isset($this->connections[$connId])) {
+                    $this->connections[$connId]['device_id'] = $deviceId;
+                }
+                Cache::put("jetson_ws_online_{$deviceId}", true, 86400);
                 Cache::put('jetson_ws_online', true, 86400);
+                Cache::put("jetson_ws_cameras_{$deviceId}", $data['cameras'] ?? [], 86400);
                 Cache::put('jetson_ws_cameras', $data['cameras'] ?? [], 86400);
-                Cache::put('jetson_ws_version', $data['version'] ?? 'unknown', 86400);
+                Cache::put("jetson_ws_version_{$deviceId}", $data['version'] ?? 'unknown', 86400);
+                Cache::put("jetson_ws_last_heartbeat_{$deviceId}", now()->timestamp, 86400);
                 Cache::put('jetson_ws_last_heartbeat', now()->timestamp, 86400);
-                Log::info("[WebSocket] Jetson logged in.", $data);
+                Log::info("[WebSocket] Jetson {$deviceId} logged in.", $data);
+                $this->recordStartup($deviceId);
                 break;
 
             case 'heartbeat':
+                $deviceId = $this->connections[$connId]['device_id'] ?? 'jetson-1';
+                Cache::put("jetson_ws_online_{$deviceId}", true, 86400);
                 Cache::put('jetson_ws_online', true, 86400);
+                Cache::put("jetson_ws_last_heartbeat_{$deviceId}", now()->timestamp, 86400);
                 Cache::put('jetson_ws_last_heartbeat', now()->timestamp, 86400);
+                
+                // Record startup if no active log
+                $latestLog = \App\Models\DevicePowerLog::where('device_id', $deviceId)
+                    ->orderBy('id', 'desc')
+                    ->first();
+                if (!$latestLog || !is_null($latestLog->stopped_at)) {
+                    $this->recordStartup($deviceId);
+                }
                 break;
 
             // Handle ACKs and other events
@@ -299,6 +323,47 @@ class JetsonWebSocketHandler
             default:
                 Log::warning("[WebSocket] Unhandled event: {$event}");
                 break;
+        }
+    }
+
+    /**
+     * Record device startup to DB
+     */
+    private function recordStartup($deviceId)
+    {
+        try {
+            // Close any existing open log entry for this device
+            \App\Models\DevicePowerLog::where('device_id', $deviceId)
+                ->whereNull('stopped_at')
+                ->update([
+                    'stopped_at' => now(),
+                    'reason' => 'Unexpected disconnect (reconnection)',
+                ]);
+
+            // Create a new start log entry
+            \App\Models\DevicePowerLog::create([
+                'device_id' => $deviceId,
+                'started_at' => now(),
+            ]);
+        } catch (\Exception $e) {
+            Log::error("[WebSocket] Failed to record startup for {$deviceId}: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Record device shutdown to DB
+     */
+    private function recordShutdown($deviceId, $reason = 'Disconnected')
+    {
+        try {
+            \App\Models\DevicePowerLog::where('device_id', $deviceId)
+                ->whereNull('stopped_at')
+                ->update([
+                    'stopped_at' => now(),
+                    'reason' => $reason,
+                ]);
+        } catch (\Exception $e) {
+            Log::error("[WebSocket] Failed to record shutdown for {$deviceId}: " . $e->getMessage());
         }
     }
 }

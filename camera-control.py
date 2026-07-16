@@ -494,12 +494,14 @@ def run_vps_sync(ws, request_id, vps_config, options):
     estimated_time_minutes = max(1, int(estimated_seconds / 60))
 
     # Start Ack
+    files_list = [f[1].replace(os.sep, '/') for f in files]
     send_ws_event(ws, "sync.start.ack", {
         "request_id": request_id,
         "status": "started",
         "total_files": total_files,
         "total_size_gb": total_size_gb,
-        "estimated_time_minutes": estimated_time_minutes
+        "estimated_time_minutes": estimated_time_minutes,
+        "files_list": files_list
     })
 
     if total_files == 0:
@@ -535,38 +537,51 @@ def run_vps_sync(ws, request_id, vps_config, options):
         file_size = os.path.getsize(path)
         current_file_rel = rel_path.replace(os.sep, '/')
 
-        upload_success = True
+        upload_success = False
         error_msg = None
 
-        try:
-            with open(path, 'rb') as f:
-                resp = requests.post(
-                    upload_url,
-                    files={'file': (os.path.basename(path), f, 'video/mp4')},
-                    data={
-                        'jetson_name': JETSON_NAME,
-                        'relative_path': current_file_rel,
-                        'overwrite': '1' if overwrite else '0',
-                    },
-                    headers={'Authorization': f'Bearer {upload_token}'},
-                    timeout=300,  # 5 min per file
-                    verify=False,
-                )
+        # Retry logic with Connection: close header to prevent SSL/EOF issues
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                with open(path, 'rb') as f:
+                    f.seek(0)
+                    resp = requests.post(
+                        upload_url,
+                        files={'file': (os.path.basename(path), f, 'video/mp4')},
+                        data={
+                            'jetson_name': JETSON_NAME,
+                            'relative_path': current_file_rel,
+                            'overwrite': '1' if overwrite else '0',
+                        },
+                        headers={
+                            'Authorization': f'Bearer {upload_token}',
+                            'Connection': 'close'
+                        },
+                        timeout=300,  # 5 min per file
+                        verify=False,
+                    )
 
-                if resp.status_code == 200:
-                    resp_data = resp.json()
-                    if not resp_data.get('success', False):
-                        upload_success = False
-                        error_msg = resp_data.get('error', 'Unknown server error')
-                else:
-                    upload_success = False
-                    error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
-        except requests.exceptions.Timeout:
-            upload_success = False
-            error_msg = "Upload timed out (5 min limit)"
-        except Exception as e:
-            upload_success = False
-            error_msg = str(e)
+                    if resp.status_code == 200:
+                        resp_data = resp.json()
+                        if resp_data.get('success', False):
+                            upload_success = True
+                            error_msg = None
+                            break  # success, exit retry loop
+                        else:
+                            error_msg = resp_data.get('error', 'Unknown server error')
+                    else:
+                        error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            except requests.exceptions.Timeout:
+                error_msg = "Upload timed out (5 min limit)"
+                break  # don't retry on 5 min timeout
+            except Exception as e:
+                error_msg = str(e)
+
+            # If we failed, wait and retry
+            if attempt < max_attempts - 1:
+                log.warning(f"Upload attempt {attempt + 1} failed for {current_file_rel}: {error_msg}. Retrying...")
+                time.sleep(2)
 
         bytes_uploaded += file_size
 
@@ -601,7 +616,8 @@ def run_vps_sync(ws, request_id, vps_config, options):
             "current_file": current_file_rel,
             "speed_mbps": speed_mbps,
             "eta_seconds": eta,
-            "percent": percent
+            "percent": percent,
+            "failed_files": failed_files
         })
 
     # Sync complete
@@ -975,11 +991,14 @@ def main():
                 if now - last_settings_poll >= settings_poll_interval:
                     last_settings_poll = now
                     settings = poll_settings()
-                    for camera_id, cam_settings in settings.items():
-                        if camera_id in CAMERAS:
-                            quality = cam_settings.get("quality", "hd")
-                            fps     = int(cam_settings.get("fps", 15))
-                            transcoder_manager.apply_settings(camera_id, quality, fps)
+                    if isinstance(settings, dict):
+                        for camera_id, cam_settings in settings.items():
+                            if camera_id in CAMERAS:
+                                quality = cam_settings.get("quality", "hd")
+                                fps     = int(cam_settings.get("fps", 15))
+                                transcoder_manager.apply_settings(camera_id, quality, fps)
+                    else:
+                        log.warning(f"Poll settings returned non-dict type: {type(settings)}")
 
                 # Poll PTZ commands
                 for camera_id in CAMERAS:

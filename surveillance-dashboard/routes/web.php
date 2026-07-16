@@ -28,6 +28,13 @@ Route::get('/surveillance/devices', [SurveillanceController::class, 'devices'])
 Route::get('/surveillance/devices/{deviceId}', [SurveillanceController::class, 'deviceSettings'])
     ->name('surveillance.device-settings');
 
+// Uploaded Recordings list & playback
+Route::get('/surveillance/recordings', [SurveillanceController::class, 'recordings'])
+    ->name('surveillance.recordings');
+Route::get('/surveillance/recordings/play/{jetsonName}/{path}', [SurveillanceController::class, 'playVideo'])
+    ->where('path', '.*')
+    ->name('surveillance.recordings.play');
+
 // Remote Terminal Sessions
 Route::post('/surveillance/devices/{deviceId}/terminal/request', [\App\Http\Controllers\DeviceAgentController::class, 'requestTerminal'])
     ->name('surveillance.device-terminal.request');

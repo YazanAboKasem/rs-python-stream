@@ -66,6 +66,13 @@
                         <span class="sv-nav-badge">{{ $deviceCount }}</span>
                     </a>
 
+                    <a href="{{ route('surveillance.recordings') }}"
+                       class="sv-nav-link {{ request()->routeIs('surveillance.recordings') ? 'active' : '' }}"
+                       id="nav-recordings">
+                        <i class="bi bi-collection-play-fill"></i>
+                        <span>Recordings</span>
+                    </a>
+
                     <div class="sv-nav-section-label" style="margin-top: 20px">System</div>
 
                     <a href="#" class="sv-nav-link" id="nav-system-info" onclick="toggleSystemPanel(event)">

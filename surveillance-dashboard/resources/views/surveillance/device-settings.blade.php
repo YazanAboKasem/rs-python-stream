@@ -81,6 +81,9 @@
                     <button class="sv-btn sv-btn-secondary" id="test-mode-toggle-btn" onclick="toggleTestMode()" style="display:inline-flex;align-items:center;gap:8px">
                         <i class="bi bi-cpu-fill"></i> Test Mode
                     </button>
+                    <button class="sv-btn sv-btn-secondary" id="power-logs-btn" onclick="openPowerLogsModal()" style="display:inline-flex;align-items:center;gap:8px">
+                        <i class="bi bi-clock-history"></i> Power Logs
+                    </button>
                     <button class="sv-btn sv-btn-danger" id="reboot-jetson-btn" onclick="rebootJetson()" style="display:inline-flex;align-items:center;gap:8px">
                         <i class="bi bi-power"></i> Restart Jetson
                     </button>
@@ -177,6 +180,57 @@
                 </div>
             @endforelse
         </div>
+    <!-- Server Power Logs Modal -->
+    <div id="power-logs-modal" class="sv-modal-backdrop hidden" onclick="closePowerLogsModal()">
+        <div class="sv-modal-card" style="max-width: 650px; width: 90%; background: var(--surface-1); border-color: var(--accent);" onclick="event.stopPropagation()">
+            <div class="sv-modal-header">
+                <h3 class="sv-modal-title">
+                    <i class="bi bi-clock-history" style="color:var(--accent)"></i>
+                    Server Start/Shutdown History (UAE Time)
+                </h3>
+                <button class="sv-modal-close" onclick="document.getElementById('power-logs-modal').classList.add('hidden')">&times;</button>
+            </div>
+            <div class="sv-modal-body" style="padding: 20px; max-height: 400px; overflow-y: auto;">
+                <table style="width:100%; border-collapse: collapse; text-align: left;">
+                    <thead>
+                        <tr style="border-bottom: 2px solid var(--border); color: var(--text-muted); font-size: 12px;">
+                            <th style="padding: 10px 8px;">#</th>
+                            <th style="padding: 10px 8px;">Started At (UAE)</th>
+                            <th style="padding: 10px 8px;">Stopped At (UAE)</th>
+                            <th style="padding: 10px 8px;">Reason / Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @forelse($powerLogs ?? [] as $index => $log)
+                            <tr style="border-bottom: 1px solid var(--border); font-size: 13px;">
+                                <td style="padding: 10px 8px; color: var(--text-muted);">{{ $index + 1 }}</td>
+                                <td style="padding: 10px 8px; font-family: var(--font-mono); color: var(--text-secondary);">{{ $log['started_at'] }}</td>
+                                <td style="padding: 10px 8px; font-family: var(--font-mono); color: var(--text-secondary);">
+                                    @if($log['stopped_at'] === 'Active Now')
+                                        <span style="color: var(--green); font-weight: 600; display:inline-flex; align-items:center; gap:6px;">
+                                            <span style="width: 8px; height: 8px; background: var(--green); border-radius: 50%;"></span>
+                                            Active Now
+                                        </span>
+                                    @else
+                                        {{ $log['stopped_at'] }}
+                                    @endif
+                                </td>
+                                <td style="padding: 10px 8px; color: var(--text-muted);">{{ $log['reason'] }}</td>
+                            </tr>
+                        @empty
+                            <tr>
+                                <td colspan="4" style="padding: 20px; text-align: center; color: var(--text-muted);">
+                                    No power logs recorded yet for this device.
+                                </td>
+                            </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+            <div class="sv-modal-footer">
+                <button type="button" class="sv-btn sv-btn-secondary" onclick="document.getElementById('power-logs-modal').classList.add('hidden')">Close</button>
+            </div>
+        </div>
     </div>
 
 @endsection
@@ -190,5 +244,16 @@
     <script src="{{ asset('js/diagnostic.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
     <script src="{{ asset('js/qnap-sync.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
     <script src="{{ asset('js/terminal.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
+    
+    <script>
+        function openPowerLogsModal() {
+            document.getElementById('power-logs-modal').classList.remove('hidden');
+        }
+        function closePowerLogsModal(e) {
+            if (!e || e.target === document.getElementById('power-logs-modal')) {
+                document.getElementById('power-logs-modal').classList.add('hidden');
+            }
+        }
+    </script>
 @endpush
 
