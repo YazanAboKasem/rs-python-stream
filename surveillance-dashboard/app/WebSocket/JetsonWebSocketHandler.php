@@ -309,6 +309,7 @@ class JetsonWebSocketHandler
             case 'diagnostic.tunnel_status':
             case 'diagnostic.logs':
             case 'sync.start.ack':
+            case 'sync.list_files.ack':
             case 'sync.progress':
             case 'sync.complete':
             case 'sync.pause.ack':

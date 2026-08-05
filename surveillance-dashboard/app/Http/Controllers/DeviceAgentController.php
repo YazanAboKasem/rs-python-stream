@@ -204,8 +204,8 @@ class DeviceAgentController extends Controller
             'jetson_id' => $deviceId,
             'port' => $port,
             'status' => 'requested',
-            'timeout_minutes' => 10,
-            'expires_at' => now()->addMinutes(10),
+            'timeout_minutes' => 60,
+            'expires_at' => now()->addMinutes(60),
         ]);
 
         // 4. Create the command for python agent
@@ -215,7 +215,7 @@ class DeviceAgentController extends Controller
             'payload' => [
                 'session_id' => $session->id,
                 'port' => $port,
-                'timeout_minutes' => 10,
+                'timeout_minutes' => 60,
             ],
             'status' => 'pending',
         ]);

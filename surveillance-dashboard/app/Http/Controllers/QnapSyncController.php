@@ -41,6 +41,7 @@ class QnapSyncController extends Controller
             'days' => 'nullable|integer',
             'delete_after_upload' => 'boolean',
             'overwrite_existing' => 'boolean',
+            'files' => 'nullable|array',
         ]);
 
         $requestId = 'sync_' . uniqid();
@@ -63,6 +64,7 @@ class QnapSyncController extends Controller
             'days' => $request->input('days') ? (int) $request->input('days') : null,
             'delete_after_upload' => $request->boolean('delete_after_upload'),
             'overwrite_existing' => $request->boolean('overwrite_existing'),
+            'files' => $request->input('files', []),
         ];
 
         // Send sync start command via WS
@@ -145,6 +147,55 @@ class QnapSyncController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Cancel command sent.'
+        ]);
+    }
+
+    /**
+     * POST /api/surveillance/sync/scan
+     *
+     * Tells the Jetson to list files ready for sync based on filters.
+     */
+    public function scan(Request $request): JsonResponse
+    {
+        if (! $this->isAuthorized($request)) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        if (! $this->wsService->isOnline()) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Jetson is offline. Cannot scan files.'
+            ], 400);
+        }
+
+        $request->validate([
+            'scope' => 'required|string|in:all,today,last_n_days,cameras',
+            'cameras' => 'nullable|array',
+            'days' => 'nullable|integer',
+        ]);
+
+        $requestId = 'scan_' . uniqid();
+        $options = [
+            'scope' => $request->input('scope'),
+            'cameras' => $request->input('cameras', []),
+            'days' => $request->input('days') ? (int) $request->input('days') : null,
+        ];
+
+        $this->wsService->sendSyncListFiles($requestId, $options);
+
+        // Poll cache for response (up to 10.0 seconds)
+        $response = $this->wsService->getEventResponse('sync.list_files.ack', $requestId, 10.0);
+
+        if (!$response) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Timeout waiting for Jetson response.'
+            ], 408);
+        }
+
+        return response()->json([
+            'success' => true,
+            'files' => $response['files'] ?? [],
         ]);
     }
 

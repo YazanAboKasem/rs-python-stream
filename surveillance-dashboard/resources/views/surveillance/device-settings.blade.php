@@ -75,9 +75,9 @@
             </div>
             <div class="sv-settings-card-body">
                 <div class="sv-settings-actions">
-                    <button class="sv-btn sv-btn-secondary" id="sync-recordings-btn" onclick="openSyncModal()" style="display:inline-flex;align-items:center;gap:8px">
+                    <a class="sv-btn sv-btn-secondary" id="sync-recordings-btn" href="{{ route('surveillance.device-sync', $device['id']) }}" style="display:inline-flex;align-items:center;gap:8px;text-decoration:none">
                         <i class="bi bi-cloud-arrow-up-fill"></i> Sync Recordings
-                    </button>
+                    </a>
                     <button class="sv-btn sv-btn-secondary" id="test-mode-toggle-btn" onclick="toggleTestMode()" style="display:inline-flex;align-items:center;gap:8px">
                         <i class="bi bi-cpu-fill"></i> Test Mode
                     </button>
@@ -133,7 +133,7 @@
                     <div class="sv-sync-stats-grid">
                         <div class="sv-sync-stat-box">
                             <span class="sv-sync-stat-label">Timeout</span>
-                            <span class="sv-sync-stat-val" id="terminal-stat-time">10:00</span>
+                            <span class="sv-sync-stat-val" id="terminal-stat-time">60:00</span>
                         </div>
                         <div class="sv-sync-stat-box">
                             <span class="sv-sync-stat-label">Remote Port</span>
@@ -157,11 +157,6 @@
     <!-- Diagnostics Panel (Test Mode) -->
     <x-diagnostic />
 
-    <!-- Sync Progress Panel -->
-    <x-sync-progress />
-
-    <!-- Sync Modal -->
-    <x-qnap-sync-modal />
 
     {{-- Camera Streams --}}
     <div class="sv-settings-section">
@@ -242,7 +237,7 @@
     {{-- Stream player + diagnostics + sync + terminal --}}
     <script src="{{ asset('js/stream-player.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
     <script src="{{ asset('js/diagnostic.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
-    <script src="{{ asset('js/qnap-sync.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
+
     <script src="{{ asset('js/terminal.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
     
     <script>

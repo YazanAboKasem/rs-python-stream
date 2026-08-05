@@ -50,7 +50,7 @@
                                                 <tbody>
                                                     @foreach ($dateGroup['files'] as $file)
                                                         <tr style="border-bottom: 1px solid rgba(255,255,255,0.03); font-size: 13px;">
-                                                            <td style="padding: 8px; font-family: var(--font-mono); color: var(--text-secondary);">{{ $file['name'] }}</td>
+                                                            <td style="padding: 8px; font-family: var(--font-mono); color: var(--text-secondary);">{{ $file['display_name'] }}</td>
                                                             <td style="padding: 8px; color: var(--text-muted);">{{ $file['size'] }}</td>
                                                             <td style="padding: 8px; text-align: right;">
                                                                 <button class="sv-btn sv-btn-secondary" style="padding: 4px 8px; font-size: 12px; display:inline-flex; align-items:center; gap:4px;" onclick="playUploadedVideo('{{ $file['play_url'] }}', '{{ $file['name'] }}')">

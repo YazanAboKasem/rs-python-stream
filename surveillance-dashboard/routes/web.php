@@ -28,6 +28,10 @@ Route::get('/surveillance/devices', [SurveillanceController::class, 'devices'])
 Route::get('/surveillance/devices/{deviceId}', [SurveillanceController::class, 'deviceSettings'])
     ->name('surveillance.device-settings');
 
+// Device recordings sync page
+Route::get('/surveillance/devices/{deviceId}/sync', [SurveillanceController::class, 'syncPage'])
+    ->name('surveillance.device-sync');
+
 // Uploaded Recordings list & playback
 Route::get('/surveillance/recordings', [SurveillanceController::class, 'recordings'])
     ->name('surveillance.recordings');

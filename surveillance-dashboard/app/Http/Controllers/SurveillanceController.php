@@ -60,6 +60,21 @@ class SurveillanceController extends Controller
     }
 
     /**
+     * Display recordings sync page for a specific device.
+     */
+    public function syncPage(string $deviceId): View
+    {
+        $devices = $this->resolveAllDevices();
+        $device = $devices->firstWhere('id', $deviceId);
+
+        if (!$device) {
+            abort(404, "Device {$deviceId} not found");
+        }
+
+        return view('surveillance.sync', compact('device', 'devices'));
+    }
+
+    /**
      * Resolve all enabled devices with their cameras and stream URLs.
      */
     private function resolveAllDevices()
@@ -193,8 +208,26 @@ class SurveillanceController extends Controller
 
                         foreach (\Illuminate\Support\Facades\File::files($dateDir) as $file) {
                             $filename = $file->getFilename();
+                            
+                            $displayName = $filename;
+                            $basename = pathinfo($filename, PATHINFO_FILENAME);
+                            $ext = pathinfo($filename, PATHINFO_EXTENSION);
+                            $parts = explode('-', $basename);
+                            if (count($parts) === 3) {
+                                $hour = (int)$parts[0];
+                                $min = $parts[1];
+                                $amPm = $hour >= 12 ? 'PM' : 'AM';
+                                $displayHour = $hour % 12;
+                                if ($displayHour === 0) {
+                                    $displayHour = 12;
+                                }
+                                $displayHour = str_pad($displayHour, 2, '0', STR_PAD_LEFT);
+                                $displayName = "{$displayHour}:{$min} {$amPm}.{$ext}";
+                            }
+
                             $files[] = [
                                 'name' => $filename,
+                                'display_name' => $displayName,
                                 'size' => round($file->getSize() / (1024 * 1024), 2) . ' MB',
                                 'play_url' => route('surveillance.recordings.play', [
                                     'jetsonName' => $deviceName,

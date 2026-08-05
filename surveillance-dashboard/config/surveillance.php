@@ -117,7 +117,41 @@ return [
     | If 'devices' is empty, the system falls back to this flat camera list
     | and treats them as a single default device.
     */
-    'cameras' => [],
+    'cameras' => [
+        [
+            'id'         => 'cam1',
+            'label'      => 'Camera 1 — Front View',
+            'path'       => 'cam1',
+            'path_sub'   => 'cam1_sub',
+            'path_ultra' => 'cam1_ultra',
+            'path_live'  => 'cam1_live',
+            'ip'         => '192.168.1.64',
+            'enabled'    => true,
+            'ptz'        => true,
+        ],
+        [
+            'id'         => 'cam2',
+            'label'      => 'Camera 2 — Rear PTZ',
+            'path'       => 'cam2',
+            'path_sub'   => 'cam2_sub',
+            'path_ultra' => 'cam2_ultra',
+            'path_live'  => 'cam2_live',
+            'ip'         => '192.168.1.65',
+            'enabled'    => true,
+            'ptz'        => true,
+        ],
+        [
+            'id'         => 'cam3',
+            'label'      => 'Camera 3 — Back View',
+            'path'       => 'cam3',
+            'path_sub'   => 'cam3_sub',
+            'path_ultra' => 'cam3_ultra',
+            'path_live'  => 'cam3_live',
+            'ip'         => '192.168.1.67',
+            'enabled'    => true,
+            'ptz'        => true,
+        ],
+    ],
 
     /*
     |--------------------------------------------------------------------------

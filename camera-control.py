@@ -394,6 +394,56 @@ def execute_ptz(camera_id: str, cmd: dict) -> tuple:
 
 
 # ─── VPS Recording Sync — File Scanner & HTTP Uploader ────────────────────────
+
+def verify_file_on_server(upload_url: str, upload_token: str, jetson_name: str,
+                          relative_path: str, expected_size: int) -> bool:
+    """
+    Verify that a file exists on the VPS server with the correct size.
+    Uses the dedicated /api/surveillance/recordings/verify endpoint for efficiency.
+    Returns True if the file is confirmed on server with matching size.
+    """
+    try:
+        # Derive verify URL from upload_url
+        # e.g. https://vps.example.com/api/surveillance/recordings/upload
+        #   -> https://vps.example.com/api/surveillance/recordings/verify
+        verify_url = upload_url.replace('/recordings/upload', '/recordings/verify')
+
+        resp = requests.post(
+            verify_url,
+            json={
+                'jetson_name':   jetson_name,
+                'relative_path': relative_path,
+                'expected_size': expected_size,
+            },
+            headers={
+                'Authorization': f'Bearer {upload_token}',
+                'Accept':        'application/json',
+            },
+            timeout=30,
+            verify=False,
+        )
+
+        if resp.status_code != 200:
+            log.warning(f"[sync] verify: server returned HTTP {resp.status_code} for {relative_path}")
+            return False
+
+        data = resp.json()
+        if data.get('verified') is True:
+            return True
+
+        reason = data.get('reason', 'unknown')
+        server_size = data.get('server_size')
+        log.warning(
+            f"[sync] verify: NOT verified for {relative_path} — "
+            f"reason='{reason}', server_size={server_size}, expected={expected_size}"
+        )
+        return False
+
+    except Exception as e:
+        log.error(f"[sync] verify: exception while verifying {relative_path}: {e}")
+        return False
+
+
 def create_mock_recordings(base_dir):
     """Populate mock recordings directory for testing sync pipelines."""
     today = datetime.now().date()
@@ -569,59 +619,135 @@ def run_vps_sync(ws, request_id, vps_config, options):
         current_file_rel = rel_path.replace(os.sep, '/')
 
         upload_success = False
+        upload_skipped = False
         error_msg = None
 
-        # Retry logic with Connection: close header to prevent SSL/EOF issues
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                with open(path, 'rb') as f:
-                    f.seek(0)
-                    resp = requests.post(
-                        upload_url,
-                        files={'file': (os.path.basename(path), f, 'video/mp4')},
-                        data={
-                            'jetson_name': JETSON_NAME,
-                            'relative_path': current_file_rel,
-                            'overwrite': '1' if overwrite else '0',
-                        },
-                        headers={
-                            'Authorization': f'Bearer {upload_token}',
-                            'Connection': 'close'
-                        },
-                        timeout=300,  # 5 min per file
-                        verify=False,
-                    )
+        # Chunk size: 10 MB (10 * 1024 * 1024 bytes)
+        chunk_size = 10 * 1024 * 1024
+        total_chunks = max(1, (file_size + chunk_size - 1) // chunk_size)
+        chunk_upload_url = upload_url.replace('/recordings/upload', '/recordings/upload-chunk')
 
-                    if resp.status_code == 200:
-                        resp_data = resp.json()
-                        if resp_data.get('success', False):
-                            upload_success = True
-                            error_msg = None
-                            break  # success, exit retry loop
-                        else:
-                            error_msg = resp_data.get('error', 'Unknown server error')
-                    else:
-                        error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
-            except requests.exceptions.Timeout:
-                error_msg = "Upload timed out (5 min limit)"
-                break  # don't retry on 5 min timeout
-            except Exception as e:
-                error_msg = str(e)
+        try:
+            with open(path, 'rb') as f:
+                for chunk_index in range(total_chunks):
+                    if sync_cancelled:
+                        break
+                    while sync_paused and not sync_cancelled:
+                        time.sleep(0.5)
+                    if sync_cancelled:
+                        break
 
-            # If we failed, wait and retry
-            if attempt < max_attempts - 1:
-                log.warning(f"Upload attempt {attempt + 1} failed for {current_file_rel}: {error_msg}. Retrying...")
-                time.sleep(2)
+                    chunk_data = f.read(chunk_size)
+                    chunk_len = len(chunk_data)
 
-        bytes_uploaded += file_size
+                    # Retry logic per chunk
+                    chunk_success = False
+                    max_attempts = 3
+                    for attempt in range(max_attempts):
+                        try:
+                            import io
+                            chunk_file = io.BytesIO(chunk_data)
+                            resp = requests.post(
+                                chunk_upload_url,
+                                files={'file': (f"chunk_{chunk_index}", chunk_file, 'application/octet-stream')},
+                                data={
+                                    'jetson_name': JETSON_NAME,
+                                    'relative_path': current_file_rel,
+                                    'chunk_index': str(chunk_index),
+                                    'total_chunks': str(total_chunks),
+                                    'overwrite': '1' if overwrite else '0',
+                                },
+                                headers={
+                                    'Authorization': f'Bearer {upload_token}',
+                                    'Connection': 'close'
+                                },
+                                timeout=120,
+                                verify=False,
+                            )
+                            if resp.status_code == 200:
+                                resp_data = resp.json()
+                                if resp_data.get('success', False):
+                                    if chunk_index == 0 and resp_data.get('status') == 'skipped':
+                                        chunk_success = True
+                                        upload_skipped = True
+                                        break
+                                    chunk_success = True
+                                    break
+                                else:
+                                    error_msg = resp_data.get('error', 'Unknown response error')
+                            else:
+                                error_msg = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                        except Exception as e:
+                            error_msg = str(e)
+                            time.sleep(2)
+
+                    if not chunk_success:
+                        raise Exception(f"Failed to upload chunk {chunk_index}: {error_msg}")
+
+                    if upload_skipped:
+                        # Skip remaining chunks since file already exists on server
+                        bytes_uploaded += file_size
+                        break
+                    
+                    bytes_uploaded += chunk_len
+
+                    # Report progress inside the chunk loop to make the UI update smoothly
+                    percent = round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0
+                    elapsed = time.time() - t_start
+                    speed_bps = bytes_uploaded / elapsed if elapsed > 0 else 0
+                    speed_mbps = round(speed_bps * 8 / (1024 * 1024), 1)
+                    eta = int((total_bytes - bytes_uploaded) / speed_bps) if speed_bps > 0 else 0
+
+                    send_ws_event(ws, "sync.progress", {
+                        "request_id": request_id,
+                        "files_uploaded": files_uploaded,
+                        "files_total": total_files,
+                        "bytes_uploaded": bytes_uploaded,
+                        "bytes_total": total_bytes,
+                        "current_file": current_file_rel,
+                        "speed_mbps": speed_mbps,
+                        "eta_seconds": eta,
+                        "percent": percent,
+                        "failed_files": failed_files
+                    })
+
+            if not sync_cancelled:
+                upload_success = True
+                error_msg = None
+        except Exception as e:
+            upload_success = False
+            error_msg = str(e)
+
+            # Since the file upload failed, adjust bytes_uploaded to represent the total size so progress is consistent
+            uploaded_chunk_bytes = (chunk_index + 1) * chunk_size
+            remaining_file_bytes = max(0, file_size - uploaded_chunk_bytes)
+            bytes_uploaded += remaining_file_bytes
+
+        if upload_success and not upload_skipped:
+            # ── Verify file exists on server with correct size before marking as done ──
+            log.info(f"[sync] Verifying upload on server for: {current_file_rel}")
+            server_confirmed = verify_file_on_server(
+                upload_url=upload_url,
+                upload_token=upload_token,
+                jetson_name=JETSON_NAME,
+                relative_path=current_file_rel,
+                expected_size=file_size
+            )
+            if not server_confirmed:
+                upload_success = False
+                error_msg = "Server verification failed: file not found or size mismatch after upload."
+                log.error(f"[sync] Server verification FAILED for {current_file_rel}")
+            else:
+                log.info(f"[sync] Server verification OK for {current_file_rel}")
 
         if upload_success:
             files_uploaded += 1
-            if delete_after_upload:
+            # Delete local file only after confirmed on server (not skipped files)
+            if delete_after_upload and not upload_skipped:
                 try:
                     os.remove(path)
                     local_files_deleted += 1
+                    log.info(f"[sync] Deleted local file after confirmed upload: {current_file_rel}")
                 except Exception as e:
                     log.error(f"Failed to delete local file {path}: {e}")
         else:
@@ -631,7 +757,7 @@ def run_vps_sync(ws, request_id, vps_config, options):
                 "error": error_msg
             })
 
-        # Report progress after each file
+        # Report final progress for this file
         percent = round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0
         elapsed = time.time() - t_start
         speed_bps = bytes_uploaded / elapsed if elapsed > 0 else 0

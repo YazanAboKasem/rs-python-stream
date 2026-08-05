@@ -85,6 +85,123 @@ class RecordingUploadController extends Controller
     }
 
     /**
+     * POST /api/surveillance/recordings/upload-chunk
+     *
+     * Receives a file chunk and merges it when all chunks are uploaded.
+     */
+    public function uploadChunk(Request $request): JsonResponse
+    {
+        if (! $this->isAuthorized($request)) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        $request->validate([
+            'file' => 'required|file',
+            'jetson_name' => 'required|string|max:100|regex:/^[a-zA-Z0-9_-]+$/',
+            'relative_path' => 'required|string|max:500',
+            'chunk_index' => 'required|integer|min:0',
+            'total_chunks' => 'required|integer|min:1',
+            'overwrite' => 'boolean',
+        ]);
+
+        $jetsonName = $request->input('jetson_name');
+        $relativePath = $request->input('relative_path');
+        $chunkIndex = (int) $request->input('chunk_index');
+        $totalChunks = (int) $request->input('total_chunks');
+        $overwrite = $request->boolean('overwrite', false);
+
+        // Sanitize relative path
+        $relativePath = str_replace(['..', "\0"], '', $relativePath);
+        $relativePath = ltrim($relativePath, '/');
+
+        $basePath = $this->getRecordingsBasePath();
+        $fullPath = "{$basePath}/{$jetsonName}/{$relativePath}";
+        $dir = dirname($fullPath);
+
+        // Check if file exists and overwrite is not set (before starting chunk upload)
+        if ($chunkIndex === 0 && File::exists($fullPath) && ! $overwrite) {
+            return response()->json([
+                'success' => true,
+                'status' => 'skipped',
+                'message' => 'File already exists on server.',
+            ]);
+        }
+
+        // Temporary directory for chunks
+        $tempDir = storage_path("framework/cache/chunks/{$jetsonName}/" . md5($relativePath));
+        if (! File::isDirectory($tempDir)) {
+            File::makeDirectory($tempDir, 0755, true);
+        }
+
+        // Move the uploaded chunk
+        try {
+            $chunkFilename = "chunk_{$chunkIndex}";
+            $request->file('file')->move($tempDir, $chunkFilename);
+
+            // Check if we have received all chunks
+            $receivedChunks = count(File::files($tempDir));
+            
+            if ($receivedChunks === $totalChunks) {
+                // Merge chunks
+                if (! File::isDirectory($dir)) {
+                    File::makeDirectory($dir, 0755, true);
+                }
+
+                // If overwrite and file exists, delete it first
+                if (File::exists($fullPath)) {
+                    File::delete($fullPath);
+                }
+
+                // Open output file
+                $out = fopen($fullPath, 'wb');
+                if (!$out) {
+                    throw new \Exception("Could not open output file for writing: {$fullPath}");
+                }
+
+                // Append each chunk in order
+                for ($i = 0; $i < $totalChunks; $i++) {
+                    $chunkPath = "{$tempDir}/chunk_{$i}";
+                    if (! File::exists($chunkPath)) {
+                        fclose($out);
+                        throw new \Exception("Missing chunk index: {$i}");
+                    }
+                    $in = fopen($chunkPath, 'rb');
+                    while ($buff = fread($in, 4096)) {
+                        fwrite($out, $buff);
+                    }
+                    fclose($in);
+                }
+                fclose($out);
+
+                // Clean up temp directory
+                File::deleteDirectory($tempDir);
+
+                Log::info("[RecordingUpload] Saved Chunked File: {$jetsonName}/{$relativePath}");
+
+                return response()->json([
+                    'success' => true,
+                    'status' => 'uploaded',
+                    'path' => "{$jetsonName}/{$relativePath}",
+                ]);
+            }
+
+            return response()->json([
+                'success' => true,
+                'status' => 'chunk_saved',
+                'chunk_index' => $chunkIndex,
+                'total_chunks' => $totalChunks,
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error("[RecordingUpload] Chunked Upload Failed: {$e->getMessage()}");
+            return response()->json([
+                'success' => false,
+                'error' => 'Failed to save chunk: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * GET /api/surveillance/recordings/browse/{jetsonName?}
      *
      * List recordings stored on VPS, optionally filtered by Jetson name.
@@ -210,6 +327,62 @@ class RecordingUploadController extends Controller
         }
 
         return response()->download($fullPath);
+    }
+
+    /**
+     * POST /api/surveillance/recordings/verify
+     *
+     * Quickly verify that a specific file exists on VPS storage with the expected size.
+     * Called by camera-control.py after a successful chunk upload to confirm integrity
+     * before deleting the local copy.
+     */
+    public function verify(Request $request): JsonResponse
+    {
+        if (! $this->isAuthorized($request)) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        $request->validate([
+            'jetson_name'   => 'required|string|max:100|regex:/^[a-zA-Z0-9_-]+$/',
+            'relative_path' => 'required|string|max:500',
+            'expected_size' => 'required|integer|min:0',
+        ]);
+
+        $jetsonName    = $request->input('jetson_name');
+        $relativePath  = $request->input('relative_path');
+        $expectedSize  = (int) $request->input('expected_size');
+
+        // Sanitize path
+        $relativePath = str_replace(['..', "\0"], '', $relativePath);
+        $relativePath = ltrim($relativePath, '/');
+
+        $fullPath = $this->getRecordingsBasePath() . "/{$jetsonName}/{$relativePath}";
+
+        if (! File::exists($fullPath)) {
+            return response()->json([
+                'verified'      => false,
+                'reason'        => 'File not found on server.',
+                'server_size'   => null,
+                'expected_size' => $expectedSize,
+            ]);
+        }
+
+        $serverSize = File::size($fullPath);
+
+        if ($serverSize !== $expectedSize) {
+            return response()->json([
+                'verified'      => false,
+                'reason'        => 'File size mismatch.',
+                'server_size'   => $serverSize,
+                'expected_size' => $expectedSize,
+            ]);
+        }
+
+        return response()->json([
+            'verified'      => true,
+            'server_size'   => $serverSize,
+            'expected_size' => $expectedSize,
+        ]);
     }
 
     /**

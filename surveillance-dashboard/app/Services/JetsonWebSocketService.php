@@ -105,6 +105,17 @@ class JetsonWebSocketService
     }
 
     /**
+     * Send sync list files command.
+     */
+    public function sendSyncListFiles(string $requestId, array $options): void
+    {
+        $this->sendEvent('sync.list_files', [
+            'request_id' => $requestId,
+            'options' => $options
+        ]);
+    }
+
+    /**
      * Poll cache for a response to an event with a timeout.
      */
     public function getEventResponse(string $event, string $requestId, float $timeout = 5.0): ?array
