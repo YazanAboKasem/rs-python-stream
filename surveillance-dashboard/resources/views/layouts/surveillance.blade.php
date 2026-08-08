@@ -73,6 +73,13 @@
                         <span>Recordings</span>
                     </a>
 
+                    <a href="{{ route('surveillance.map') }}"
+                       class="sv-nav-link {{ request()->routeIs('surveillance.map') ? 'active' : '' }}"
+                       id="nav-fleet-map">
+                        <i class="bi bi-geo-alt-fill"></i>
+                        <span>Fleet Map</span>
+                    </a>
+
                     <div class="sv-nav-section-label" style="margin-top: 20px">System</div>
 
                     <a href="#" class="sv-nav-link" id="nav-system-info" onclick="toggleSystemPanel(event)">

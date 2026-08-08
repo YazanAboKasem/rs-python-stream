@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\SurveillanceController;
+use App\Http\Controllers\MapController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -44,4 +45,8 @@ Route::post('/surveillance/devices/{deviceId}/terminal/request', [\App\Http\Cont
     ->name('surveillance.device-terminal.request');
 Route::get('/surveillance/devices/{deviceId}/terminal/status', [\App\Http\Controllers\DeviceAgentController::class, 'terminalStatus'])
     ->name('surveillance.device-terminal.status');
+
+// Fleet Map
+Route::get('/surveillance/map', [MapController::class, 'index'])
+    ->name('surveillance.map');
 

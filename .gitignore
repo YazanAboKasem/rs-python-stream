@@ -1,4 +1,15 @@
 __pycache__/
+__pycache__.zip
 *.pyc
-rs-working-mac.tar.gz
+*.tar.gz
+*.zip
+*.deb
+*.deb.*
 .DS_Store
+mediamtx
+recordings/
+*.log
+*.log.*
+auto.crt
+auto.key
+surveillance-dashboard/

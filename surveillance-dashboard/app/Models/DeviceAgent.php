@@ -19,11 +19,17 @@ class DeviceAgent extends Model
         'disk',
         'temperature',
         'system_info',
+        'latitude',
+        'longitude',
+        'last_location_at',
     ];
 
     protected $casts = [
         'online' => 'boolean',
         'last_seen' => 'datetime',
+        'last_location_at' => 'datetime',
+        'latitude' => 'float',
+        'longitude' => 'float',
         'system_info' => 'array',
     ];
 
@@ -41,5 +47,13 @@ class DeviceAgent extends Model
     public function terminalSessions(): HasMany
     {
         return $this->hasMany(DeviceTerminalSession::class, 'jetson_id', 'jetson_id');
+    }
+
+    /**
+     * Relationship: GPS location history for this agent.
+     */
+    public function locationLogs(): HasMany
+    {
+        return $this->hasMany(DeviceLocationLog::class, 'device_id', 'jetson_id');
     }
 }

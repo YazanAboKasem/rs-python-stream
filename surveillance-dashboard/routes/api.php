@@ -72,4 +72,9 @@ Route::get('/device-agent/pending-commands',  [\App\Http\Controllers\DeviceAgent
 Route::post('/device-agent/command-result',   [\App\Http\Controllers\DeviceAgentController::class, 'commandResult']);
 Route::post('/device-agent/terminal-ready',   [\App\Http\Controllers\DeviceAgentController::class, 'terminalReady']);
 Route::post('/device-agent/terminal-closed',  [\App\Http\Controllers\DeviceAgentController::class, 'terminalClosed']);
+Route::post('/device-agent/gps-update',       [\App\Http\Controllers\DeviceAgentController::class, 'gpsUpdate']);
+
+// ── Fleet Map API Endpoints ───────────────────────────────────────────────────
+Route::get('/surveillance/map/devices',           [\App\Http\Controllers\MapController::class, 'devicesGeoJson']);
+Route::get('/surveillance/map/route/{deviceId}',  [\App\Http\Controllers\MapController::class, 'deviceRoute']);
 

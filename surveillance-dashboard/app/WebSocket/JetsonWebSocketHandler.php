@@ -321,6 +321,45 @@ class JetsonWebSocketHandler
                 Log::info("[WebSocket] Stashed event {$event} response for ID: {$requestId}");
                 break;
 
+            case 'gps.update':
+                $deviceId = $this->connections[$connId]['device_id'] ?? ($data['jetson_name'] ?? 'jetson-1');
+                $lat = $data['latitude'] ?? null;
+                $lng = $data['longitude'] ?? null;
+
+                if ($lat !== null && $lng !== null && $lat != 0 && $lng != 0) {
+                    // Cache latest position for real-time map polling
+                    Cache::put("gps_location_{$deviceId}", [
+                        'latitude'  => $lat,
+                        'longitude' => $lng,
+                        'speed'     => $data['speed'] ?? null,
+                        'altitude'  => $data['altitude'] ?? null,
+                        'timestamp' => now()->timestamp,
+                    ], 86400);
+
+                    // Save to database
+                    try {
+                        \App\Models\DeviceAgent::where('jetson_id', $deviceId)->update([
+                            'latitude'         => $lat,
+                            'longitude'        => $lng,
+                            'last_location_at' => now(),
+                        ]);
+
+                        \App\Models\DeviceLocationLog::create([
+                            'device_id'   => $deviceId,
+                            'latitude'    => $lat,
+                            'longitude'   => $lng,
+                            'speed'       => $data['speed'] ?? null,
+                            'altitude'    => $data['altitude'] ?? null,
+                            'recorded_at' => now(),
+                        ]);
+                    } catch (\Exception $e) {
+                        Log::error("[WebSocket] Failed to save GPS for {$deviceId}: " . $e->getMessage());
+                    }
+
+                    Log::debug("[WebSocket] GPS update for {$deviceId}: {$lat}, {$lng}");
+                }
+                break;
+
             default:
                 Log::warning("[WebSocket] Unhandled event: {$event}");
                 break;

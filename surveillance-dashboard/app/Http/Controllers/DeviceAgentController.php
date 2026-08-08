@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\DeviceAgent;
 use App\Models\DeviceAgentCommand;
+use App\Models\DeviceLocationLog;
 use App\Models\DeviceTerminalSession;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -32,22 +33,43 @@ class DeviceAgentController extends Controller
             'ram' => 'integer',
             'disk' => 'integer',
             'temperature' => 'integer',
+            'latitude' => 'nullable|numeric',
+            'longitude' => 'nullable|numeric',
         ]);
+
+        $updateData = [
+            'hostname' => $request->input('hostname'),
+            'agent_version' => $request->input('agent_version', '1.0'),
+            'online' => true,
+            'last_seen' => now(),
+            'uptime' => $request->input('uptime', 0),
+            'cpu' => $request->input('cpu', 0),
+            'ram' => $request->input('ram', 0),
+            'disk' => $request->input('disk', 0),
+            'temperature' => $request->input('temperature', 0),
+            'system_info' => $request->except(['jetson_id', 'hostname', 'agent_version', 'latitude', 'longitude']),
+        ];
+
+        // Include GPS data if provided
+        $lat = $request->input('latitude');
+        $lng = $request->input('longitude');
+        if ($lat !== null && $lng !== null && $lat != 0 && $lng != 0) {
+            $updateData['latitude'] = $lat;
+            $updateData['longitude'] = $lng;
+            $updateData['last_location_at'] = now();
+
+            // Log location history
+            DeviceLocationLog::create([
+                'device_id'   => $request->input('jetson_id'),
+                'latitude'    => $lat,
+                'longitude'   => $lng,
+                'recorded_at' => now(),
+            ]);
+        }
 
         $agent = DeviceAgent::updateOrCreate(
             ['jetson_id' => $request->input('jetson_id')],
-            [
-                'hostname' => $request->input('hostname'),
-                'agent_version' => $request->input('agent_version', '1.0'),
-                'online' => true,
-                'last_seen' => now(),
-                'uptime' => $request->input('uptime', 0),
-                'cpu' => $request->input('cpu', 0),
-                'ram' => $request->input('ram', 0),
-                'disk' => $request->input('disk', 0),
-                'temperature' => $request->input('temperature', 0),
-                'system_info' => $request->except(['jetson_id', 'hostname', 'agent_version']),
-            ]
+            $updateData
         );
 
         return response()->json([
@@ -269,6 +291,50 @@ class DeviceAgentController extends Controller
         ]);
     }
 
+
+    // ─── GPS Update Endpoint ────────────────────────────────────────────────
+
+    /**
+     * POST /api/device-agent/gps-update
+     * Dedicated endpoint for real-time GPS updates from the agent.
+     */
+    public function gpsUpdate(Request $request): JsonResponse
+    {
+        if (!$this->isAuthorized($request)) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        $request->validate([
+            'jetson_id' => 'required|string',
+            'latitude'  => 'required|numeric',
+            'longitude' => 'required|numeric',
+            'speed'     => 'nullable|numeric',
+            'altitude'  => 'nullable|numeric',
+        ]);
+
+        $jetsonId = $request->input('jetson_id');
+        $lat = $request->input('latitude');
+        $lng = $request->input('longitude');
+
+        // Update current position on device
+        DeviceAgent::where('jetson_id', $jetsonId)->update([
+            'latitude'         => $lat,
+            'longitude'        => $lng,
+            'last_location_at' => now(),
+        ]);
+
+        // Log to location history
+        DeviceLocationLog::create([
+            'device_id'   => $jetsonId,
+            'latitude'    => $lat,
+            'longitude'   => $lng,
+            'speed'       => $request->input('speed'),
+            'altitude'    => $request->input('altitude'),
+            'recorded_at' => now(),
+        ]);
+
+        return response()->json(['success' => true]);
+    }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
