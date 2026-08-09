@@ -158,7 +158,7 @@ class SurveillanceController extends Controller
             ->toArray();
 
         // Check device online status
-        $isOnline = (bool) Cache::get("jetson_ws_online_{$device['id']}", Cache::get('jetson_ws_online', false));
+        $isOnline = (bool) Cache::get("jetson_ws_online_{$device['id']}", false);
 
         return array_merge($device, [
             'cameras'      => $cameras,

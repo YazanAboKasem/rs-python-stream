@@ -58,8 +58,8 @@ return [
 
     'devices' => [
         [
-            'id'              => 'jetson-1',
-            'name'            => 'Jetson Orin — Main Gate',
+            'id'              => 'rock1',
+            'name'            => 'Rock 5B — Main Gate',
             'location'        => 'Front Entrance',
             'host'            => env('JETSON1_HOST', env('MEDIA_SERVER_HOST', '127.0.0.1')),
             'hls_port'        => env('JETSON1_HLS_PORT', env('MEDIA_SERVER_HLS_PORT', 8888)),
@@ -68,6 +68,54 @@ return [
             'webrtc_base_url' => env('JETSON1_WEBRTC_URL', env('MEDIA_SERVER_WEBRTC_URL')),
             'tunnel_cache_key' => 'surveillance_tunnel_hls_url',  // legacy key for backward compat
             'api_token'       => env('JETSON1_TOKEN', env('SURVEILLANCE_TOKEN')),
+            'enabled'         => true,
+            'cameras' => [
+                [
+                    'id'         => 'cam1',
+                    'label'      => 'Camera 1 — Front View',
+                    'path'       => 'cam1',
+                    'path_sub'   => 'cam1_sub',
+                    'path_ultra' => 'cam1_ultra',
+                    'path_live'  => 'cam1_live',
+                    'ip'         => '192.168.1.64',
+                    'enabled'    => true,
+                    'ptz'        => true,
+                ],
+                [
+                    'id'         => 'cam2',
+                    'label'      => 'Camera 2 — Rear PTZ',
+                    'path'       => 'cam2',
+                    'path_sub'   => 'cam2_sub',
+                    'path_ultra' => 'cam2_ultra',
+                    'path_live'  => 'cam2_live',
+                    'ip'         => '192.168.1.65',
+                    'enabled'    => true,
+                    'ptz'        => true,
+                ],
+                [
+                    'id'         => 'cam3',
+                    'label'      => 'Camera 3 — Back View',
+                    'path'       => 'cam3',
+                    'path_sub'   => 'cam3_sub',
+                    'path_ultra' => 'cam3_ultra',
+                    'path_live'  => 'cam3_live',
+                    'ip'         => '192.168.1.67',
+                    'enabled'    => true,
+                    'ptz'        => true,
+                ],
+            ],
+        ],
+        [
+            'id'              => 'jetson-1',
+            'name'            => 'Jetson — Main Gate',
+            'location'        => 'Front Entrance',
+            'host'            => env('JETSON2_HOST', env('MEDIA_SERVER_HOST', '127.0.0.1')),
+            'hls_port'        => env('JETSON2_HLS_PORT', env('MEDIA_SERVER_HLS_PORT', 8888)),
+            'webrtc_port'     => env('JETSON2_WEBRTC_PORT', env('MEDIA_SERVER_WEBRTC_PORT', 8889)),
+            'hls_base_url'    => env('JETSON2_HLS_URL', env('MEDIA_SERVER_HLS_URL')),
+            'webrtc_base_url' => env('JETSON2_WEBRTC_URL', env('MEDIA_SERVER_WEBRTC_URL')),
+            'tunnel_cache_key' => 'surveillance_tunnel_hls_url_jetson1',
+            'api_token'       => env('JETSON2_TOKEN', env('SURVEILLANCE_TOKEN')),
             'enabled'         => true,
             'cameras' => [
                 [

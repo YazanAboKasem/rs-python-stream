@@ -51,13 +51,13 @@ register_tunnel() {
     local url="$1"
     local endpoint="${LARAVEL_URL}/api/surveillance/register-tunnel"
 
-    log "تسجيل URL في Laravel API..."
+    log "تسجيل URL في Laravel API للجهاز (${JETSON_NAME})..."
 
     local response
     response=$(curl -s -w "\n%{http_code}" -X POST "$endpoint" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${SURVEILLANCE_TOKEN}" \
-        -d "{\"hls_url\": \"${url}\"}" \
+        -d "{\"hls_url\": \"${url}\", \"jetson_name\": \"${JETSON_NAME}\"}" \
         --connect-timeout 10 \
         --max-time 15 2>/dev/null || echo -e "\nCURL_FAILED")
 
@@ -66,7 +66,7 @@ register_tunnel() {
     http_code=$(echo "$response" | tail -n 1)
 
     if [[ "$http_code" == "200" ]]; then
-        success "✅ URL مسجّل بنجاح في Laravel!"
+        success "✅ URL مسجّل بنجاح في Laravel للجهاز (${JETSON_NAME})!"
         log "  → الكاميرات تعمل على: ${LARAVEL_URL}/surveillance"
     elif [[ "$http_code" == "401" ]]; then
         err "❌ Unauthorized — تأكد أن SURVEILLANCE_TOKEN يطابق .env على السيرفر"
@@ -84,7 +84,9 @@ clear_tunnel() {
     local endpoint="${LARAVEL_URL}/api/surveillance/register-tunnel"
     log "إلغاء تسجيل URL من Laravel..."
     curl -s -X DELETE "$endpoint" \
+        -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${SURVEILLANCE_TOKEN}" \
+        -d "{\"jetson_name\": \"${JETSON_NAME}\"}" \
         --connect-timeout 5 \
         --max-time 10 2>/dev/null && log "URL أُلغي تسجيله." || true
 }

@@ -67,12 +67,6 @@ class JetsonWebSocketHandler
         Cache::put("jetson_ws_online_{$deviceId}", false, 86400);
 
         unset($this->connections[$connId]);
-
-        // If no active connections left, mark Jetson offline
-        if (empty($this->connections)) {
-            Cache::put('jetson_ws_online', false, 86400);
-            Log::info("[WebSocket] Jetson marked offline.");
-        }
     }
 
     /**
@@ -275,12 +269,9 @@ class JetsonWebSocketHandler
                     $this->connections[$connId]['device_id'] = $deviceId;
                 }
                 Cache::put("jetson_ws_online_{$deviceId}", true, 86400);
-                Cache::put('jetson_ws_online', true, 86400);
                 Cache::put("jetson_ws_cameras_{$deviceId}", $data['cameras'] ?? [], 86400);
-                Cache::put('jetson_ws_cameras', $data['cameras'] ?? [], 86400);
                 Cache::put("jetson_ws_version_{$deviceId}", $data['version'] ?? 'unknown', 86400);
                 Cache::put("jetson_ws_last_heartbeat_{$deviceId}", now()->timestamp, 86400);
-                Cache::put('jetson_ws_last_heartbeat', now()->timestamp, 86400);
                 Log::info("[WebSocket] Jetson {$deviceId} logged in.", $data);
                 $this->recordStartup($deviceId);
                 break;
@@ -288,9 +279,7 @@ class JetsonWebSocketHandler
             case 'heartbeat':
                 $deviceId = $this->connections[$connId]['device_id'] ?? 'jetson-1';
                 Cache::put("jetson_ws_online_{$deviceId}", true, 86400);
-                Cache::put('jetson_ws_online', true, 86400);
                 Cache::put("jetson_ws_last_heartbeat_{$deviceId}", now()->timestamp, 86400);
-                Cache::put('jetson_ws_last_heartbeat', now()->timestamp, 86400);
                 
                 // Record startup if no active log
                 $latestLog = \App\Models\DevicePowerLog::where('device_id', $deviceId)

@@ -24,8 +24,10 @@ class WebSocketServeCommand extends Command
 
         $handler = new JetsonWebSocketHandler();
         
-        // Reset online status on start
-        Cache::put('jetson_ws_online', false, 86400);
+        // Reset online status on start for configured devices
+        foreach (config('surveillance.devices', []) as $device) {
+            Cache::put("jetson_ws_online_{$device['id']}", false, 86400);
+        }
         Cache::put('ws_outbound_queue', [], 86400);
 
         try {
@@ -103,7 +105,6 @@ class WebSocketServeCommand extends Command
                         $lastHeartbeat = Cache::get("jetson_ws_last_heartbeat_{$deviceId}");
                         if ($lastHeartbeat && (now()->timestamp - $lastHeartbeat > 60)) {
                             Cache::put("jetson_ws_online_{$deviceId}", false, 86400);
-                            Cache::put('jetson_ws_online', false, 86400); // legacy fallback
                             Log::info("[WebSocket] Jetson {$deviceId} marked offline due to heartbeat timeout (>60s)");
                             
                             // Log shutdown in DB
