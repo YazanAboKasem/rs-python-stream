@@ -69,11 +69,13 @@ class JetsonWSClient:
         ws_url: str,
         token: str,
         cameras: list[str] | None = None,
+        device_name: str | None = None,
         poll_interval: float = 0.8,
     ):
         self.ws_url = ws_url
         self.token = token
         self.cameras = cameras or []
+        self.device_name = device_name or "jetson-1"
         self.poll_interval = poll_interval
 
         self._handlers: dict[str, Callable] = {}
@@ -206,6 +208,7 @@ class JetsonWSClient:
             # Send initial identification
             await self.send("jetson.hello", {
                 "cameras": self.cameras,
+                "jetson_name": self.device_name,
                 "version": "2.0.0",
                 "timestamp": time.time(),
             })
