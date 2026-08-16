@@ -22,7 +22,7 @@ cd "$SCRIPT_DIR"
 
 LARAVEL_URL="https://controlroom.roadshield.ae"
 SURVEILLANCE_TOKEN="b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
-JETSON_NAME="jetson-1"   # unique name for this Jetson device (used for recording storage)
+JETSON_NAME="rock1"   # unique name for this Jetson device (used for recording storage)
 
 HLS_PORT=8888
 MEDIAMTX_BIN="./mediamtx"
@@ -35,6 +35,7 @@ MEDIAMTX_PID=""
 TUNNEL_PID=""
 CAMERA_CTRL_PID=""
 REC_CLEANUP_PID=""
+DEVICE_STATS_PID=""
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'
@@ -97,6 +98,7 @@ cleanup() {
     echo ""
     log "إيقاف النظام..."
     clear_tunnel
+    [[ -n "$DEVICE_STATS_PID" ]] && kill "$DEVICE_STATS_PID" 2>/dev/null && log "device_stats.py متوقف."
     [[ -n "$REC_CLEANUP_PID" ]] && kill "$REC_CLEANUP_PID" 2>/dev/null && log "recording-cleanup.py متوقف."
     [[ -n "$CAMERA_CTRL_PID" ]] && kill "$CAMERA_CTRL_PID" 2>/dev/null && log "camera-control.py متوقف."
     [[ -n "$TUNNEL_PID"      ]] && kill "$TUNNEL_PID"      2>/dev/null && log "Cloudflare Tunnel متوقف."
@@ -203,6 +205,23 @@ if command -v python3 &>/dev/null && [[ -f "recording-cleanup.py" ]]; then
     fi
 else
     warn "recording-cleanup.py غير موجود — إدارة القرص غير مفعّلة."
+fi
+echo ""
+
+# ─── 1d. Start device_stats.py (CPU/RAM/temperature reporting) ───────────────
+if command -v python3 &>/dev/null && [[ -f "device_stats.py" ]]; then
+    log "تشغيل device_stats.py (مراقبة الموارد)..."
+    python3 device_stats.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" --jetson-name="$JETSON_NAME" > /tmp/device-stats.log 2>&1 &
+    DEVICE_STATS_PID=$!
+    sleep 1
+    if kill -0 "$DEVICE_STATS_PID" 2>/dev/null; then
+        log "device_stats.py يعمل (PID: $DEVICE_STATS_PID)"
+    else
+        warn "device_stats.py فشل في التشغيل. تحقق من: /tmp/device-stats.log"
+        DEVICE_STATS_PID=""
+    fi
+else
+    warn "device_stats.py غير موجود أو python3 غير متاح — مراقبة الموارد غير مفعّلة."
 fi
 echo ""
 

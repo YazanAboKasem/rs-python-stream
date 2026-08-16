@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 import sys
 LARAVEL_URL       = "https://controlroom.dubibid.com"
 SURVEILLANCE_TOKEN = "b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
-JETSON_NAME        = platform.node() or "jetson-1"  # default: system hostname
+JETSON_NAME        = "rock1"  # device name sent to dashboard
 
 # Allow CLI overrides (e.g. passed from connect-to-server.sh)
 for arg in sys.argv:
@@ -44,9 +44,9 @@ for arg in sys.argv:
 CAMERAS = {
     "cam1": {"ip": "192.168.1.64", "user": "admin", "password": "hikvision@12", "channel": 1},
     "cam2": {"ip": "192.168.1.65", "user": "admin", "password": "hikvision@12", "channel": 1},
-    "cam3": {"ip": "192.168.1.67", "user": "admin", "password": "hikvision@12", "channel": 1},
+    "cam3": {"ip": "192.168.1.165", "user": "admin", "password": "12345", "channel": 1, "type": "generic", "rtsp_port": 8554},
 }
-SHOW_LOCAL_VIEWER = True  # Set to True to open a local window showing the transcoded stream
+SHOW_LOCAL_VIEWER = False  # Set to True to open a local window showing the transcoded stream
 POLL_INTERVAL  = 0.8   # seconds between polls per camera
 ISAPI_TIMEOUT  = 3     # seconds for ISAPI request timeout
 PTZ_SPEED      = 40    # 0-100 for Hikvision ISAPI
@@ -174,9 +174,11 @@ class TranscoderManager:
         proc = self.active_processes.get(camera_id)
 
         # Check reachability of camera
-        ip = CAMERAS.get(camera_id, {}).get("ip")
+        cam_cfg = CAMERAS.get(camera_id, {})
+        ip = cam_cfg.get("ip")
+        rtsp_port = cam_cfg.get("rtsp_port", 554)
         is_reachable = ping_check(ip) if ip else False
-        is_rtsp_ok = rtsp_probe(ip) if is_reachable else False
+        is_rtsp_ok = rtsp_probe(ip, rtsp_port) if is_reachable else False
         use_fallback = not (is_reachable and is_rtsp_ok)
 
         settings_changed = (not prev or 
@@ -1166,41 +1168,17 @@ def main():
     # Start WebSocket client in separate daemon thread
     threading.Thread(target=websocket_client_thread, daemon=True).start()
 
-    transcoder_manager = TranscoderManager()
-
-    last_settings_poll = 0.0
-    settings_poll_interval = 2.0  # seconds
-
-    # Force initial transcoders boot-up
-    for camera_id in CAMERAS.keys():
-        transcoder_manager.apply_settings(camera_id, "hd", 15)
+    # ── Live (FFmpeg re-encode) pipeline disabled ────────────────────────────
+    # The dashboard now plays the native MediaMTX "Sub" (camX_sub) and "Main"
+    # (camX) streams directly, so the per-camera FFmpeg transcoder
+    # (TranscoderManager) is no longer started, saving CPU/GPU on the Jetson.
 
     try:
         while True:
             now = time.time()
-            
-            # Monitoring loop - check if camera states changed or processes died
-            # This handles offline -> online camera fallback recovery automatically!
-            for camera_id in CAMERAS.keys():
-                prev_settings = transcoder_manager.current_settings.get(camera_id, {"quality": "hd", "fps": 15})
-                # Check and apply
-                transcoder_manager.apply_settings(camera_id, prev_settings["quality"], prev_settings["fps"])
 
-            # HTTP Poll Settings & PTZ only as fallback when WebSocket is offline
+            # HTTP Poll PTZ only as fallback when WebSocket is offline
             if not ws_connected:
-                # Poll and apply settings
-                if now - last_settings_poll >= settings_poll_interval:
-                    last_settings_poll = now
-                    settings = poll_settings()
-                    if isinstance(settings, dict):
-                        for camera_id, cam_settings in settings.items():
-                            if camera_id in CAMERAS:
-                                quality = cam_settings.get("quality", "hd")
-                                fps     = int(cam_settings.get("fps", 15))
-                                transcoder_manager.apply_settings(camera_id, quality, fps)
-                    else:
-                        log.warning(f"Poll settings returned non-dict type: {type(settings)}")
-
                 # Poll PTZ commands
                 for camera_id in CAMERAS:
                     commands = poll_commands(camera_id)
