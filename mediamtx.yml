@@ -47,19 +47,12 @@ paths:
     source: rtsp://admin:hikvision%4012@192.168.1.65:554/Streaming/Channels/102
     sourceProtocol: tcp
 
-  # ── Camera 3 — 192.168.1.67 (Back View) ─────────────────────────────────
-  cam3:                           # HD  ~2-6 Mbps
-    source: rtsp://admin:hikvision%4012@192.168.1.67:554/Streaming/Channels/101
+  # ── Camera 3 — 192.168.1.165 (Rear View — Non-Hikvision) ─────────────────
+  cam3:                           # Main  (channel /0)
+    source: rtsp://admin:12345@192.168.1.165:8554/0
     sourceProtocol: tcp
     record: yes
 
-  cam3_sub:                       # SD  ~300-800 Kbps
-    source: rtsp://admin:hikvision%4012@192.168.1.67:554/Streaming/Channels/102
+  cam3_sub:                       # Sub  (channel /1)
+    source: rtsp://admin:12345@192.168.1.165:8554/1
     sourceProtocol: tcp
-
-  # ── Dynamic quality streams — published by camera-control.py + FFmpeg ───────
-  # Python reads quality settings from Laravel API and re-encodes at that quality.
-  # Browser always connects to camX_live — quality changes server-side.
-  cam1_live:   # Dynamic: resolution/fps/bitrate set from Laravel dashboard
-  cam2_live:   # Dynamic: resolution/fps/bitrate set from Laravel dashboard
-  cam3_live:   # Dynamic: resolution/fps/bitrate set from Laravel dashboard
