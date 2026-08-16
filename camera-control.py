@@ -527,6 +527,63 @@ def get_files_to_sync(scope, cameras_filter, days_filter):
     return filtered_files
 
 
+SYNC_MAX_HEIGHT = 1080  # cap uploaded recordings at Full HD to save bandwidth
+
+
+def prepare_upload_file(path):
+    """
+    If a recording is above Full HD, transcode a temporary 1080p copy to
+    upload instead — cuts bandwidth substantially (e.g. 4K -> 1080p) with
+    no visible quality loss for playback. Files already <=1080p are
+    uploaded as-is (no re-encode, no quality/generation loss).
+
+    Returns (upload_path, is_temp_file).
+    """
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height",
+             "-of", "csv=p=0:s=x", path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5
+        )
+        dims = probe.stdout.strip()
+        width, height = (int(x) for x in dims.split("x")) if "x" in dims else (0, 0)
+    except Exception as e:
+        log.warning(f"[sync] Could not probe resolution for {path}: {e}. Uploading original.")
+        return path, False
+
+    if height <= SYNC_MAX_HEIGHT or width <= 0:
+        return path, False  # already Full HD or smaller
+
+    tmp_path = f"{path}.sync1080p.mp4"
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-i", path,
+        "-vf", f"scale=-2:{SYNC_MAX_HEIGHT}",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        tmp_path,
+    ]
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=900)
+        if result.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            log.info(f"[sync] Compressed {os.path.basename(path)} to {SYNC_MAX_HEIGHT}p for upload "
+                      f"({os.path.getsize(path)} -> {os.path.getsize(tmp_path)} bytes)")
+            return tmp_path, True
+        log.warning(f"[sync] Compression failed for {path} (rc={result.returncode}), uploading original. "
+                    f"stderr={result.stderr.decode(errors='replace')[:200]}")
+    except Exception as e:
+        log.warning(f"[sync] Compression error for {path}: {e}. Uploading original.")
+
+    if os.path.exists(tmp_path):
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+    return path, False
+
+
 def run_vps_sync(ws, request_id, vps_config, options):
     """Upload selected recording files to VPS server via HTTP multipart upload."""
     global sync_paused, sync_cancelled
@@ -617,8 +674,13 @@ def run_vps_sync(ws, request_id, vps_config, options):
         if sync_cancelled:
             break
 
-        file_size = os.path.getsize(path)
         current_file_rel = rel_path.replace(os.sep, '/')
+
+        # Downscale to Full HD before upload if the recording is larger
+        # (e.g. Camera 3's 4K Main stream) — saves bandwidth, no effect on
+        # files already at or below 1080p.
+        upload_path, is_temp_upload = prepare_upload_file(path)
+        file_size = os.path.getsize(upload_path)
 
         upload_success = False
         upload_skipped = False
@@ -630,7 +692,7 @@ def run_vps_sync(ws, request_id, vps_config, options):
         chunk_upload_url = upload_url.replace('/recordings/upload', '/recordings/upload-chunk')
 
         try:
-            with open(path, 'rb') as f:
+            with open(upload_path, 'rb') as f:
                 for chunk_index in range(total_chunks):
                     if sync_cancelled:
                         break
@@ -724,6 +786,13 @@ def run_vps_sync(ws, request_id, vps_config, options):
             uploaded_chunk_bytes = (chunk_index + 1) * chunk_size
             remaining_file_bytes = max(0, file_size - uploaded_chunk_bytes)
             bytes_uploaded += remaining_file_bytes
+
+        # Clean up the temporary 1080p copy now that the upload attempt is done
+        if is_temp_upload:
+            try:
+                os.remove(upload_path)
+            except Exception as e:
+                log.warning(f"[sync] Failed to remove temp compressed file {upload_path}: {e}")
 
         if upload_success and not upload_skipped:
             # ── Verify file exists on server with correct size before marking as done ──
