@@ -978,6 +978,14 @@ def on_message(ws, message):
     event = payload.get("event")
     data = payload.get("data", {})
 
+    # Commands are broadcast to every connected device; only act on ones
+    # addressed to this device. Events without a target_device (older server
+    # code, or events that are inherently per-device like jetson.hello acks)
+    # are processed as before.
+    target_device = data.get("target_device")
+    if target_device and target_device != JETSON_NAME:
+        return
+
     log.info(f"[WS] Received event: {event}")
 
     if event == "ptz.command":
