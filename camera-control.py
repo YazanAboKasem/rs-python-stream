@@ -114,6 +114,9 @@ ws_connected = False
 sync_paused = False
 sync_cancelled = False
 
+# Serializes all ws.send() calls — see send_ws_event() for why this is required.
+_ws_send_lock = threading.Lock()
+
 # ─── Reachability Probes ──────────────────────────────────────────────────
 def ping_check(ip: str) -> bool:
     """Check host reachability using ping."""
@@ -1044,10 +1047,22 @@ def run_diagnostics(ws, request_id):
 import websocket
 
 def send_ws_event(ws, event: str, data: dict):
-    """Safely compile and send websocket JSON frames."""
+    """
+    Safely compile and send websocket JSON frames.
+
+    websocket-client's WebSocketApp.send() is NOT safe to call from a
+    thread other than the one running run_forever() without external
+    locking — background threads (sync progress, diagnostics, PTZ acks)
+    all call this concurrently with the main receive loop. Without this
+    lock, a badly-timed collision causes a silent deadlock in ws.send()
+    (blocked forever in a poll() syscall, no exception, no log line) —
+    e.g. a whole recording sync freezing after the first file because the
+    progress-report send hung forever.
+    """
     try:
         payload = json.dumps({"event": event, "data": data})
-        ws.send(payload)
+        with _ws_send_lock:
+            ws.send(payload)
     except Exception as e:
         log.error(f"[WS] Send failed for '{event}': {e}")
 
