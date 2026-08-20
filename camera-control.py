@@ -28,9 +28,11 @@ from datetime import datetime, timedelta
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 import sys
+from device_identity import get_device_id
+
 LARAVEL_URL       = "https://controlroom.dubibid.com"
 SURVEILLANCE_TOKEN = "b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
-JETSON_NAME        = "rock1"  # device name sent to dashboard
+SERVER_ID          = get_device_id()  # unique per device, auto-generated — never hand-edit this
 
 # Allow CLI overrides (e.g. passed from connect-to-server.sh)
 for arg in sys.argv:
@@ -38,8 +40,8 @@ for arg in sys.argv:
         LARAVEL_URL = arg.split("=", 1)[1]
     elif arg.startswith("--token="):
         SURVEILLANCE_TOKEN = arg.split("=", 1)[1]
-    elif arg.startswith("--jetson-name="):
-        JETSON_NAME = arg.split("=", 1)[1]
+    elif arg.startswith("--server-name=") or arg.startswith("--jetson-name="):
+        SERVER_ID = arg.split("=", 1)[1]
 
 CAMERAS = {
     "cam1": {"ip": "192.168.1.64", "user": "admin", "password": "hikvision@12", "channel": 1},
@@ -715,7 +717,7 @@ def run_vps_sync(ws, request_id, vps_config, options):
                                 chunk_upload_url,
                                 files={'file': (f"chunk_{chunk_index}", chunk_file, 'application/octet-stream')},
                                 data={
-                                    'jetson_name': JETSON_NAME,
+                                    'jetson_name': SERVER_ID,
                                     'relative_path': current_file_rel,
                                     'chunk_index': str(chunk_index),
                                     'total_chunks': str(total_chunks),
@@ -800,7 +802,7 @@ def run_vps_sync(ws, request_id, vps_config, options):
             server_confirmed = verify_file_on_server(
                 upload_url=upload_url,
                 upload_token=upload_token,
-                jetson_name=JETSON_NAME,
+                jetson_name=SERVER_ID,
                 relative_path=current_file_rel,
                 expected_size=file_size
             )
@@ -1052,7 +1054,7 @@ def on_message(ws, message):
     # code, or events that are inherently per-device like jetson.hello acks)
     # are processed as before.
     target_device = data.get("target_device")
-    if target_device and target_device != JETSON_NAME:
+    if target_device and target_device != SERVER_ID:
         return
 
     log.info(f"[WS] Received event: {event}")
@@ -1169,10 +1171,14 @@ def on_open(ws):
     ws_connected = True
     log.info("[WS] WebSocket Handshake Successful! Connected to Laravel.")
     
-    # Send login hello frame
+    # Send login hello frame. Sends both 'server_id' (current field name)
+    # and legacy 'jetson_name' (same value) so this agent works whether the
+    # dashboard it's talking to has been upgraded yet or not — devices in a
+    # fleet update independently via `git pull`, not all at once.
     send_ws_event(ws, "jetson.hello", {
         "cameras": list(CAMERAS.keys()),
-        "jetson_name": JETSON_NAME,
+        "server_id": SERVER_ID,
+        "jetson_name": SERVER_ID,
         "version": "2.0.0",
         "timestamp": time.time()
     })

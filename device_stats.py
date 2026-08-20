@@ -18,6 +18,8 @@ import sys
 
 import requests
 
+from device_identity import get_device_id
+
 try:
     import psutil
 except ImportError:
@@ -27,7 +29,7 @@ except ImportError:
 # ─── Configuration ──────────────────────────────────────────────────────────
 LARAVEL_URL         = "https://controlroom.roadshield.ae"
 SURVEILLANCE_TOKEN  = "b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
-JETSON_NAME         = "rock1"  # must match the device 'id' in config/surveillance.php
+SERVER_ID           = get_device_id()  # unique per device, auto-generated — never hand-edit this
 HEARTBEAT_INTERVAL  = 10       # seconds
 
 # Allow CLI overrides (e.g. passed from connect-to-server.sh)
@@ -36,8 +38,8 @@ for arg in sys.argv:
         LARAVEL_URL = arg.split("=", 1)[1]
     elif arg.startswith("--token="):
         SURVEILLANCE_TOKEN = arg.split("=", 1)[1]
-    elif arg.startswith("--jetson-name="):
-        JETSON_NAME = arg.split("=", 1)[1]
+    elif arg.startswith("--server-name=") or arg.startswith("--jetson-name="):
+        SERVER_ID = arg.split("=", 1)[1]
     elif arg.startswith("--interval="):
         HEARTBEAT_INTERVAL = int(arg.split("=", 1)[1])
 
@@ -92,7 +94,7 @@ def collect_stats() -> dict:
     uptime = int(time.time() - psutil.boot_time())
 
     return {
-        "jetson_id": JETSON_NAME,
+        "jetson_id": SERVER_ID,
         "hostname": socket.gethostname(),
         "agent_version": "1.0",
         "online": True,
@@ -130,7 +132,7 @@ def main():
     log.info("=" * 60)
     log.info("RoadShield Device Stats Agent")
     log.info(f"  Server : {LARAVEL_URL}")
-    log.info(f"  Device : {JETSON_NAME}")
+    log.info(f"  Device : {SERVER_ID}")
     log.info(f"  Every  : {HEARTBEAT_INTERVAL}s")
     log.info("=" * 60)
 

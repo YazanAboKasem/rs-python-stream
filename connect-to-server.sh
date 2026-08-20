@@ -22,7 +22,12 @@ cd "$SCRIPT_DIR"
 
 LARAVEL_URL="https://controlroom.roadshield.ae"
 SURVEILLANCE_TOKEN="b8e2ed9ae5def597e6a59f2801fca19fa758ab1a0cd3e9900b708b3aa357bc3c"
-JETSON_NAME="rock1"   # unique name for this Jetson device (used for recording storage)
+
+# Auto-generated once per device on first run (~/.roadshield/device_id) — never
+# hand-edit this. This is what makes it safe to clone this exact codebase onto
+# any number of other devices: each one gets its own unique id automatically,
+# so nothing collides. See device_identity.py.
+SERVER_ID="$(python3 "$SCRIPT_DIR/device_identity.py")"
 
 HLS_PORT=8888
 MEDIAMTX_BIN="./mediamtx"
@@ -52,13 +57,13 @@ register_tunnel() {
     local url="$1"
     local endpoint="${LARAVEL_URL}/api/surveillance/register-tunnel"
 
-    log "تسجيل URL في Laravel API للجهاز (${JETSON_NAME})..."
+    log "تسجيل URL في Laravel API للجهاز (${SERVER_ID})..."
 
     local response
     response=$(curl -s -w "\n%{http_code}" -X POST "$endpoint" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${SURVEILLANCE_TOKEN}" \
-        -d "{\"hls_url\": \"${url}\", \"jetson_name\": \"${JETSON_NAME}\"}" \
+        -d "{\"hls_url\": \"${url}\", \"jetson_name\": \"${SERVER_ID}\"}" \
         --connect-timeout 10 \
         --max-time 15 2>/dev/null || echo -e "\nCURL_FAILED")
 
@@ -67,7 +72,7 @@ register_tunnel() {
     http_code=$(echo "$response" | tail -n 1)
 
     if [[ "$http_code" == "200" ]]; then
-        success "✅ URL مسجّل بنجاح في Laravel للجهاز (${JETSON_NAME})!"
+        success "✅ URL مسجّل بنجاح في Laravel للجهاز (${SERVER_ID})!"
         log "  → الكاميرات تعمل على: ${LARAVEL_URL}/surveillance"
     elif [[ "$http_code" == "401" ]]; then
         err "❌ Unauthorized — تأكد أن SURVEILLANCE_TOKEN يطابق .env على السيرفر"
@@ -87,7 +92,7 @@ clear_tunnel() {
     curl -s -X DELETE "$endpoint" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${SURVEILLANCE_TOKEN}" \
-        -d "{\"jetson_name\": \"${JETSON_NAME}\"}" \
+        -d "{\"jetson_name\": \"${SERVER_ID}\"}" \
         --connect-timeout 5 \
         --max-time 10 2>/dev/null && log "URL أُلغي تسجيله." || true
 }
@@ -177,7 +182,7 @@ log "MediaMTX يعمل (PID: $MEDIAMTX_PID)"
 # ─── 1b. Start camera-control.py (PTZ agent) ─────────────────────────────────
 if command -v python3 &>/dev/null && [[ -f "camera-control.py" ]]; then
     log "تشغيل camera-control.py (PTZ agent)..."
-    python3 camera-control.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" --jetson-name="$JETSON_NAME" > /tmp/camera-control.log 2>&1 &
+    python3 camera-control.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" --server-name="$SERVER_ID" > /tmp/camera-control.log 2>&1 &
     CAMERA_CTRL_PID=$!
     sleep 1
     if kill -0 "$CAMERA_CTRL_PID" 2>/dev/null; then
@@ -211,7 +216,7 @@ echo ""
 # ─── 1d. Start device_stats.py (CPU/RAM/temperature reporting) ───────────────
 if command -v python3 &>/dev/null && [[ -f "device_stats.py" ]]; then
     log "تشغيل device_stats.py (مراقبة الموارد)..."
-    python3 device_stats.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" --jetson-name="$JETSON_NAME" > /tmp/device-stats.log 2>&1 &
+    python3 device_stats.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" --server-name="$SERVER_ID" > /tmp/device-stats.log 2>&1 &
     DEVICE_STATS_PID=$!
     sleep 1
     if kill -0 "$DEVICE_STATS_PID" 2>/dev/null; then
