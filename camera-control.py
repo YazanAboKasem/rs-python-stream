@@ -117,6 +117,17 @@ sync_cancelled = False
 # Serializes all ws.send() calls — see send_ws_event() for why this is required.
 _ws_send_lock = threading.Lock()
 
+# Always points at the currently-live connection. Background threads (sync,
+# diagnostics, PTZ) are started with whatever `ws` object was live at the
+# moment they were spawned; a long-running one (e.g. compressing/uploading a
+# large 4K recording can take minutes) can easily outlive that connection if
+# it drops and reconnects meanwhile. Without this, such a thread keeps
+# sending on the old, now-closed socket forever ("Connection is already
+# closed") and the browser never sees another progress update. Updated in
+# on_open() on every (re)connect; send_ws_event() prefers this over whatever
+# `ws` it was called with.
+_current_ws = None
+
 # ─── Reachability Probes ──────────────────────────────────────────────────
 def ping_check(ip: str) -> bool:
     """Check host reachability using ping."""
@@ -1061,8 +1072,9 @@ def send_ws_event(ws, event: str, data: dict):
     """
     try:
         payload = json.dumps({"event": event, "data": data})
+        target_ws = _current_ws or ws
         with _ws_send_lock:
-            ws.send(payload)
+            target_ws.send(payload)
     except Exception as e:
         log.error(f"[WS] Send failed for '{event}': {e}")
 
@@ -1196,8 +1208,9 @@ def on_message(ws, message):
 
 
 def on_open(ws):
-    global ws_connected
+    global ws_connected, _current_ws
     ws_connected = True
+    _current_ws = ws
     log.info("[WS] WebSocket Handshake Successful! Connected to Laravel.")
     
     # Send login hello frame. Sends both 'server_id' (current field name)
