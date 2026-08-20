@@ -755,7 +755,23 @@ def run_vps_sync(ws, request_id, vps_config, options):
 
         # Downscale to Full HD before upload if the recording is larger
         # (e.g. Camera 3's 4K Main stream) — saves bandwidth, no effect on
-        # files already at or below 1080p.
+        # files already at or below 1080p. Large 4K files can take a couple
+        # of minutes to compress with zero other feedback in that window,
+        # which reads as "stuck" — tell the browser what's actually
+        # happening instead of leaving it on "Initialising connection...".
+        send_ws_event(ws, "sync.progress", {
+            "request_id": request_id,
+            "files_uploaded": files_uploaded,
+            "files_total": total_files,
+            "bytes_uploaded": bytes_uploaded,
+            "bytes_total": total_bytes,
+            "current_file": f"{current_file_rel} (preparing…)",
+            "speed_mbps": 0,
+            "eta_seconds": 0,
+            "percent": round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0,
+            "failed_files": failed_files
+        })
+
         upload_path, is_temp_upload = prepare_upload_file(path)
         file_size = os.path.getsize(upload_path)
 
