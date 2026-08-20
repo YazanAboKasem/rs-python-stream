@@ -161,6 +161,15 @@ info "السيرفر: ${LARAVEL_URL}"
 info "المحلي:  MediaMTX ← كاميرات Hikvision"
 echo ""
 
+# ─── 0. Sync camera config from dashboard (IP/creds/PTZ) ─────────────────────
+# No-op if this device isn't registered yet, or has no cameras configured —
+# only rewrites mediamtx.yml when there's real camera data to write.
+if command -v python3 &>/dev/null && [[ -f "sync_camera_config.py" ]]; then
+    log "مزامنة إعدادات الكاميرات من الداشبورد..."
+    python3 sync_camera_config.py --url="$LARAVEL_URL" --token="$SURVEILLANCE_TOKEN" --server-name="$SERVER_ID" || warn "تعذّرت مزامنة إعدادات الكاميرات — سيُستخدم الإعداد المحلي الحالي."
+fi
+echo ""
+
 # ─── 1. Start MediaMTX ────────────────────────────────────────────────────────
 log "تشغيل MediaMTX..."
 

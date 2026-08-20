@@ -43,11 +43,25 @@ for arg in sys.argv:
     elif arg.startswith("--server-name=") or arg.startswith("--jetson-name="):
         SERVER_ID = arg.split("=", 1)[1]
 
+# Cameras are pulled from the dashboard (see sync_camera_config.py, run
+# before this script starts) and cached to cameras_config.json. Falls back
+# to this hardcoded dict only if that file doesn't exist yet (e.g. device
+# not registered on the dashboard yet).
+_CAMERAS_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cameras_config.json")
 CAMERAS = {
     "cam1": {"ip": "192.168.1.64", "user": "admin", "password": "hikvision@12", "channel": 1},
     "cam2": {"ip": "192.168.1.65", "user": "admin", "password": "hikvision@12", "channel": 1},
     "cam3": {"ip": "192.168.1.165", "user": "admin", "password": "12345", "channel": 1, "type": "generic", "rtsp_port": 8554},
 }
+if os.path.exists(_CAMERAS_CONFIG_PATH):
+    try:
+        with open(_CAMERAS_CONFIG_PATH) as _f:
+            _synced = json.load(_f)
+        if _synced:
+            CAMERAS = _synced
+            print(f"[camera-ctrl] Loaded {len(CAMERAS)} camera(s) from cameras_config.json (dashboard-synced).")
+    except Exception as _e:
+        print(f"[camera-ctrl] Failed to load cameras_config.json, using built-in defaults: {_e}")
 SHOW_LOCAL_VIEWER = False  # Set to True to open a local window showing the transcoded stream
 POLL_INTERVAL  = 0.8   # seconds between polls per camera
 ISAPI_TIMEOUT  = 3     # seconds for ISAPI request timeout
