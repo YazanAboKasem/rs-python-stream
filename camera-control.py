@@ -114,6 +114,18 @@ ws_connected = False
 sync_paused = False
 sync_cancelled = False
 
+# Tracks the currently-running sync (Thread) and its active ffmpeg
+# compression subprocess (Popen), if any. Without this, a user re-clicking
+# "Start Sync" (e.g. because a previous attempt looked stuck) spawns a
+# second run_vps_sync thread while the first is still alive — sync.cancel
+# only set a flag that's checked between files, so an in-progress ffmpeg
+# compression kept running regardless, and both threads could end up
+# compressing the SAME file to the SAME temp path concurrently, corrupting
+# it (0-duration, bogus-size output). See sync.start handling below.
+_sync_thread = None
+_active_ffmpeg_proc = None
+_active_ffmpeg_lock = threading.Lock()
+
 # Serializes all ws.send() calls — see send_ws_event() for why this is required.
 _ws_send_lock = threading.Lock()
 
@@ -501,7 +513,7 @@ def get_video_duration(path):
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", path
         ]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1.5)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=8)
         duration_str = result.stdout.strip()
         if duration_str:
             return round(float(duration_str))
@@ -525,7 +537,11 @@ def get_files_to_sync(scope, cameras_filter, days_filter):
     all_files = []
     for root, dirs, files in os.walk(base_dir):
         for f in files:
-            if f.endswith('.mp4'):
+            # Skip our own temp compression artifacts — if one is ever left
+            # behind (killed process, crash mid-compress), it's a leftover
+            # partial file, not a real recording, and treating it as one
+            # produces bogus/duplicate entries (0 duration, wrong size).
+            if f.endswith('.mp4') and '.sync1080p.' not in f:
                 path = os.path.join(root, f)
                 rel_path = os.path.relpath(path, base_dir)
                 all_files.append((path, rel_path))
@@ -585,7 +601,9 @@ def prepare_upload_file(path):
     if height <= SYNC_MAX_HEIGHT or width <= 0:
         return path, False  # already Full HD or smaller
 
-    tmp_path = f"{path}.sync1080p.mp4"
+    # Unique per invocation — defense in depth against two compressions of
+    # the same source ever colliding on one output path again.
+    tmp_path = f"{path}.sync1080p.{os.getpid()}.{threading.get_ident()}.mp4"
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", path,
@@ -595,16 +613,45 @@ def prepare_upload_file(path):
         "-movflags", "+faststart",
         tmp_path,
     ]
+    global _active_ffmpeg_proc
     try:
-        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=900)
-        if result.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        with _active_ffmpeg_lock:
+            _active_ffmpeg_proc = proc
+
+        # Poll instead of a single blocking wait(), so sync.cancel (which
+        # only sets a flag) can actually kill this process promptly instead
+        # of leaving it running to completion in the background.
+        start = time.time()
+        while proc.poll() is None:
+            if sync_cancelled:
+                proc.kill()
+                proc.wait()
+                log.info(f"[sync] Compression of {os.path.basename(path)} cancelled.")
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                return path, False
+            if time.time() - start > 900:
+                proc.kill()
+                proc.wait()
+                raise TimeoutError("ffmpeg compression exceeded 900s")
+            time.sleep(0.5)
+
+        with _active_ffmpeg_lock:
+            _active_ffmpeg_proc = None
+
+        if proc.returncode == 0 and os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
             log.info(f"[sync] Compressed {os.path.basename(path)} to {SYNC_MAX_HEIGHT}p for upload "
                       f"({os.path.getsize(path)} -> {os.path.getsize(tmp_path)} bytes)")
             return tmp_path, True
-        log.warning(f"[sync] Compression failed for {path} (rc={result.returncode}), uploading original. "
-                    f"stderr={result.stderr.decode(errors='replace')[:200]}")
+        stderr = proc.stderr.read().decode(errors='replace')[:200] if proc.stderr else ''
+        log.warning(f"[sync] Compression failed for {path} (rc={proc.returncode}), uploading original. "
+                    f"stderr={stderr}")
     except Exception as e:
         log.warning(f"[sync] Compression error for {path}: {e}. Uploading original.")
+    finally:
+        with _active_ffmpeg_lock:
+            _active_ffmpeg_proc = None
 
     if os.path.exists(tmp_path):
         try:
@@ -1139,7 +1186,23 @@ def on_message(ws, message):
         request_id = data.get("request_id")
         vps_config = data.get("vps", {})
         options = data.get("options", {})
-        threading.Thread(target=run_vps_sync, args=(ws, request_id, vps_config, options), daemon=True).start()
+
+        global _sync_thread
+        if _sync_thread is not None and _sync_thread.is_alive():
+            # A sync is already running (e.g. the user re-clicked Start
+            # because a previous attempt looked stuck). Stop it properly —
+            # including killing any in-progress ffmpeg compression — and
+            # wait for it to actually exit before starting the new one, so
+            # two syncs never compress/upload the same file at once.
+            log.warning("[sync] New sync.start received while one is already running — cancelling the old one first.")
+            sync_cancelled = True
+            with _active_ffmpeg_lock:
+                if _active_ffmpeg_proc is not None:
+                    _active_ffmpeg_proc.kill()
+            _sync_thread.join(timeout=15)
+
+        _sync_thread = threading.Thread(target=run_vps_sync, args=(ws, request_id, vps_config, options), daemon=True)
+        _sync_thread.start()
 
     elif event == "sync.list_files":
         request_id = data.get("request_id")
@@ -1168,7 +1231,11 @@ def on_message(ws, message):
                     "duration": duration
                 }
 
-            with ThreadPoolExecutor(max_workers=24) as executor:
+            # 24 concurrent ffprobe processes on a small SBC (Rock 5B) causes
+            # enough CPU/disk contention that ffprobe calls miss their own
+            # timeout — exactly what was producing "duration: 0" for large
+            # recordings. 6 keeps scans reasonably fast without starving them.
+            with ThreadPoolExecutor(max_workers=6) as executor:
                 files_data = list(executor.map(process_file, files))
 
             log.info(f"[WS] Sending sync.list_files.ack with {len(files_data)} files.")
@@ -1196,6 +1263,12 @@ def on_message(ws, message):
 
     elif event == "sync.cancel":
         sync_cancelled = True
+        # Kill any in-progress ffmpeg compression immediately instead of
+        # waiting for its next poll tick (up to 0.5s) or letting it run to
+        # completion — see prepare_upload_file().
+        with _active_ffmpeg_lock:
+            if _active_ffmpeg_proc is not None:
+                _active_ffmpeg_proc.kill()
 
     elif event == "jetson.reboot":
         send_ws_event(ws, "jetson.reboot.ack", {"status": "rebooting"})
