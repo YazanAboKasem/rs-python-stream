@@ -67,6 +67,20 @@ def fetch_camera_config():
 
 
 def rtsp_source(cam: dict, sub: bool) -> str:
+    # An explicit URL from the dashboard always wins — most reliable, since
+    # the user already knows it works. Injects credentials if the URL
+    # doesn't already have an "://user:pass@" section.
+    explicit = (cam.get("rtsp_sub_url") if sub else cam.get("rtsp_main_url")) or ""
+    explicit = explicit.strip()
+    if explicit:
+        user = cam.get("username") or ""
+        pw = cam.get("password") or ""
+        if (user or pw) and "@" not in explicit.split("://", 1)[-1].split("/", 1)[0]:
+            scheme, rest = explicit.split("://", 1)
+            explicit = f"{scheme}://{quote(user, safe='')}:{quote(pw, safe='')}@{rest}"
+        return explicit
+
+    # No explicit URL — fall back to composing one from ip/type/channel/port.
     user = quote(cam.get("username") or "", safe="")
     pw = quote(cam.get("password") or "", safe="")
     ip = cam.get("ip") or ""
