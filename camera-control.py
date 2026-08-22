@@ -527,8 +527,14 @@ def get_video_duration(path):
     return 0
 
 
-def get_files_to_sync(scope, cameras_filter, days_filter):
-    """Scan the recordings/ directory and filter files based on sync parameters."""
+def get_files_to_sync(scope, cameras_filter, days_filter, source='sub'):
+    """
+    Scan the recordings/ directory and filter files based on sync parameters.
+    `source` selects which stream tier to sync from: 'sub' (default, low-res
+    — the top-level dir name ends in "_sub") or 'main' (full-res, everything
+    else). `cameras_filter` is matched against the base camera id with any
+    "_sub" suffix stripped, so camera selection works the same in both modes.
+    """
     base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
     if not os.path.exists(base_dir):
         os.makedirs(base_dir)
@@ -551,11 +557,18 @@ def get_files_to_sync(scope, cameras_filter, days_filter):
 
     for path, rel_path in all_files:
         parts = rel_path.split(os.sep)
-        
-        # Filter by camera
+        top_dir = parts[0]
+        is_sub_dir = top_dir.endswith('_sub')
+        base_cam_id = top_dir[:-len('_sub')] if is_sub_dir else top_dir
+
+        # Filter by stream tier (main vs sub)
+        if (source == 'sub') != is_sub_dir:
+            continue
+
+        # Filter by camera — compare against the base id (suffix stripped)
+        # so camera selection works the same regardless of source tier.
         if scope == 'cameras' and cameras_filter:
-            cam_id = parts[0]
-            if cam_id not in cameras_filter:
+            if base_cam_id not in cameras_filter:
                 continue
 
         # Filter by date/days
@@ -673,6 +686,7 @@ def run_vps_sync(ws, request_id, vps_config, options):
     scope = options.get("scope", "all")
     cameras = options.get("cameras", [])
     days = options.get("days")
+    source = options.get("source", "sub")
     delete_after_upload = options.get("delete_after_upload", True)
     overwrite = options.get("overwrite_existing", False)
 
@@ -694,7 +708,7 @@ def run_vps_sync(ws, request_id, vps_config, options):
                 if os.path.exists(full_path):
                     files.append((full_path, rel_path))
         else:
-            files = get_files_to_sync(scope, cameras, days)
+            files = get_files_to_sync(scope, cameras, days, source)
     except Exception as e:
         send_ws_event(ws, "sync.start.ack", {
             "request_id": request_id,
@@ -753,27 +767,35 @@ def run_vps_sync(ws, request_id, vps_config, options):
 
         current_file_rel = rel_path.replace(os.sep, '/')
 
-        # Downscale to Full HD before upload if the recording is larger
-        # (e.g. Camera 3's 4K Main stream) — saves bandwidth, no effect on
-        # files already at or below 1080p. Large 4K files can take a couple
-        # of minutes to compress with zero other feedback in that window,
-        # which reads as "stuck" — tell the browser what's actually
-        # happening instead of leaving it on "Initialising connection...".
-        send_ws_event(ws, "sync.progress", {
-            "request_id": request_id,
-            "files_uploaded": files_uploaded,
-            "files_total": total_files,
-            "bytes_uploaded": bytes_uploaded,
-            "bytes_total": total_bytes,
-            "current_file": current_file_rel,
-            "stage": "compressing",
-            "speed_mbps": 0,
-            "eta_seconds": 0,
-            "percent": round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0,
-            "failed_files": failed_files
-        })
+        # source == 'main' means the user explicitly asked for full-res,
+        # uncompressed uploads — skip transcoding entirely rather than
+        # capping at 1080p. (source == 'sub' files are already low-res from
+        # the camera, so prepare_upload_file() no-ops on them anyway.)
+        if source == 'main':
+            upload_path, is_temp_upload = path, False
+        else:
+            # Downscale to Full HD before upload if the recording is larger
+            # (e.g. Camera 3's 4K Main stream) — saves bandwidth, no effect on
+            # files already at or below 1080p. Large 4K files can take a couple
+            # of minutes to compress with zero other feedback in that window,
+            # which reads as "stuck" — tell the browser what's actually
+            # happening instead of leaving it on "Initialising connection...".
+            send_ws_event(ws, "sync.progress", {
+                "request_id": request_id,
+                "files_uploaded": files_uploaded,
+                "files_total": total_files,
+                "bytes_uploaded": bytes_uploaded,
+                "bytes_total": total_bytes,
+                "current_file": current_file_rel,
+                "stage": "compressing",
+                "speed_mbps": 0,
+                "eta_seconds": 0,
+                "percent": round((bytes_uploaded / total_bytes) * 100, 1) if total_bytes > 0 else 0,
+                "failed_files": failed_files
+            })
 
-        upload_path, is_temp_upload = prepare_upload_file(path)
+            upload_path, is_temp_upload = prepare_upload_file(path)
+
         file_size = os.path.getsize(upload_path)
 
         upload_success = False
@@ -1228,9 +1250,10 @@ def on_message(ws, message):
         scope = options.get("scope", "all")
         cameras = options.get("cameras", [])
         days = options.get("days")
-        log.info(f"[WS] Scanning files for sync request: {request_id} (scope={scope})")
+        source = options.get("source", "sub")
+        log.info(f"[WS] Scanning files for sync request: {request_id} (scope={scope}, source={source})")
         try:
-            files = get_files_to_sync(scope, cameras, days)
+            files = get_files_to_sync(scope, cameras, days, source)
             log.info(f"[WS] Found {len(files)} files to scan.")
             
             from concurrent.futures import ThreadPoolExecutor

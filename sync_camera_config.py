@@ -111,6 +111,7 @@ def build_paths_block(cameras: list) -> str:
         lines.append(f"  {key}_sub:")
         lines.append(f"    source: {rtsp_source(cam, sub=True)}")
         lines.append("    sourceProtocol: tcp")
+        lines.append("    record: yes")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

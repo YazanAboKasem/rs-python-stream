@@ -68,6 +68,21 @@
                         </div>
                     </div>
 
+                    {{-- Video Quality (sync source) --}}
+                    <div class="sv-form-group" style="margin-bottom: 20px;">
+                        <label class="sv-label" style="display: block; margin-bottom: 8px; font-weight: 600;">Video Quality</label>
+                        <div class="sv-radio-group" style="display: flex; flex-direction: column; gap: 10px;">
+                            <label class="sv-radio-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="radio" name="sync-source" value="sub" checked onchange="scanFiles()">
+                                <span>Low-res (sub-stream) — recommended, saves bandwidth</span>
+                            </label>
+                            <label class="sv-radio-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="radio" name="sync-source" value="main" onchange="scanFiles()">
+                                <span>Full resolution (main stream) — larger, uncompressed upload</span>
+                            </label>
+                        </div>
+                    </div>
+
                     {{-- Camera Checklist (hidden by default) --}}
                     <div class="sv-form-group hidden" id="cameras-selection-row" style="margin-bottom: 20px; padding-left: 20px; border-left: 2px solid var(--border);">
                         <label class="sv-label" style="display: block; margin-bottom: 8px; font-weight: 600;">Select Cameras</label>

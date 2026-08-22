@@ -42,6 +42,21 @@
                     </div>
                 </div>
 
+                <!-- Video Quality (sync source) -->
+                <div class="sv-form-group">
+                    <label class="sv-label">Video Quality</label>
+                    <div class="sv-radio-group">
+                        <label class="sv-radio-label">
+                            <input type="radio" name="sync-source" value="sub" checked>
+                            <span>Low-res (sub-stream) — recommended, saves bandwidth</span>
+                        </label>
+                        <label class="sv-radio-label">
+                            <input type="radio" name="sync-source" value="main">
+                            <span>Full resolution (main stream) — larger, uncompressed upload</span>
+                        </label>
+                    </div>
+                </div>
+
                 <!-- Cameras Selection (hidden by default) -->
                 <div class="sv-form-group hidden" id="cameras-selection-row">
                     <label class="sv-label">Select Cameras</label>

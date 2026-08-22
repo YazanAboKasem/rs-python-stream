@@ -63,12 +63,14 @@
         errLabel.classList.add('hidden');
 
         const scope = document.querySelector('input[name="sync-scope"]:checked')?.value;
+        const source = document.querySelector('input[name="sync-source"]:checked')?.value || 'sub';
         const selectedCams = Array.from(document.querySelectorAll('input[name="sync-cameras"]:checked')).map(el => el.value);
 
         const payload = {
             scope: scope,
             cameras: scope === 'cameras' ? selectedCams : [],
             days: scope === 'last_n_days' ? parseInt(document.getElementById('sync-days').value, 10) : null,
+            source: source,
             delete_after_upload: document.getElementById('delete-after-upload').checked,
             overwrite_existing: document.getElementById('overwrite-existing').checked,
         };
@@ -327,11 +329,20 @@
         title.textContent = 'Sync Completion Report';
         title.className = 'sv-report-title success';
 
+        const originalGb = c.total_original_gb || 0;
+        const uploadedGb = c.total_uploaded_gb || 0;
+        const savedPct = originalGb > 0 ? Math.max(0, Math.round((1 - uploadedGb / originalGb) * 100)) : 0;
+        const compressionRow = originalGb > 0 && uploadedGb < originalGb
+            ? `<div class="report-stat-row"><span>Compression:</span> <span class="val green">${savedPct}% smaller</span></div>`
+            : '';
+
         stats.innerHTML = `
             <div class="report-stat-row"><span>Status:</span> <span class="val green">Completed</span></div>
             <div class="report-stat-row"><span>Total Files:</span> <span class="val">${c.files_uploaded} uploaded</span></div>
             <div class="report-stat-row"><span>Failed Files:</span> <span class="val">${c.files_failed || 0} failed</span></div>
-            <div class="report-stat-row"><span>Uploaded Size:</span> <span class="val">${c.total_uploaded_gb || 0} GB</span></div>
+            <div class="report-stat-row"><span>Original Size:</span> <span class="val">${originalGb.toFixed(2)} GB</span></div>
+            <div class="report-stat-row"><span>Uploaded Size:</span> <span class="val">${uploadedGb.toFixed(2)} GB</span></div>
+            ${compressionRow}
             <div class="report-stat-row"><span>Time Elapsed:</span> <span class="val">${c.duration_minutes || 0} mins</span></div>
             <div class="report-stat-row"><span>Local Space Cleared:</span> <span class="val">${c.local_files_deleted || 0} files deleted</span></div>`;
 

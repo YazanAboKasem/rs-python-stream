@@ -104,13 +104,16 @@
         
         // Form parameters
         const scope = document.querySelector('input[name="sync-scope"]:checked')?.value;
+        const source = document.querySelector('input[name="sync-source"]:checked')?.value || 'sub';
         const selectedCams = Array.from(document.querySelectorAll('input[name="sync-cameras"]:checked')).map(el => el.value);
         const days = scope === 'last_n_days' ? parseInt(document.getElementById('sync-days').value, 10) : null;
 
         const payload = {
+            device_id: window.CURRENT_DEVICE_ID,
             scope: scope,
             cameras: scope === 'cameras' ? selectedCams : [],
-            days: days
+            days: days,
+            source: source
         };
 
         // UI Feedback
@@ -132,20 +135,57 @@
             return r.json();
         })
         .then(data => {
-            if (data.success) {
-                renderScannedFiles(data.files);
+            if (data.success && data.request_id) {
+                pollScanStatus(data.request_id, indicator);
+            } else {
+                throw new Error(data.error || 'Scan failed to start');
             }
         })
         .catch(err => {
             console.error('[Sync Scan] Error:', err);
-            // Hide files list if scan failed
             document.getElementById('scanned-files-card').classList.add('hidden');
-        })
-        .finally(() => {
-            if (indicator) {
-                indicator.classList.add('hidden');
-            }
+            if (indicator) indicator.classList.add('hidden');
         });
+    }
+
+    /**
+     * Poll for scan completion — file scanning (ffprobe per file) can take
+     * much longer than a single request should block for, so the backend
+     * returns immediately and we poll until it's done.
+     */
+    function pollScanStatus(requestId, indicator) {
+        const token = document.querySelector('meta[name="surveillance-token"]')?.content || '';
+        const startedAt = Date.now();
+        const MAX_WAIT_MS = 180000; // 3 minutes — large recording folders can take a while
+
+        const tick = () => {
+            fetch(`/api/surveillance/sync/scan/status/${requestId}`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (!data.done) {
+                    if (Date.now() - startedAt > MAX_WAIT_MS) {
+                        throw new Error('Timed out waiting for the device to finish scanning.');
+                    }
+                    setTimeout(tick, 1500);
+                    return;
+                }
+                if (indicator) indicator.classList.add('hidden');
+                if (data.success) {
+                    renderScannedFiles(data.files);
+                } else {
+                    throw new Error(data.error || 'Scan failed on device.');
+                }
+            })
+            .catch(err => {
+                console.error('[Sync Scan] Error:', err);
+                document.getElementById('scanned-files-card').classList.add('hidden');
+                if (indicator) indicator.classList.add('hidden');
+            });
+        };
+
+        tick();
     }
 
     /**
@@ -283,13 +323,16 @@
         }
 
         const scope = document.querySelector('input[name="sync-scope"]:checked')?.value;
+        const source = document.querySelector('input[name="sync-source"]:checked')?.value || 'sub';
         const selectedCams = Array.from(document.querySelectorAll('input[name="sync-cameras"]:checked')).map(el => el.value);
         const days = scope === 'last_n_days' ? parseInt(document.getElementById('sync-days').value, 10) : null;
-        
+
         const payload = {
+            device_id: window.CURRENT_DEVICE_ID,
             scope: scope,
             cameras: scope === 'cameras' ? selectedCams : [],
             days: days,
+            source: source, // explicit files (below) already reflect this tier from the scan step; still needed so run_vps_sync knows whether to skip compression
             delete_after_upload: document.getElementById('delete-after-upload').checked,
             overwrite_existing: document.getElementById('overwrite-existing').checked,
             files: selectedPaths // Send selected files!
@@ -444,7 +487,10 @@
         }
         document.getElementById('sync-stat-eta').textContent = etaText;
 
-        document.getElementById('sync-current-file').textContent = p.current_file || 'None';
+        const isCompressing = p.stage === 'compressing';
+        document.getElementById('sync-current-file').textContent = p.current_file
+            ? (isCompressing ? `${p.current_file} — compressing to 1080p…` : p.current_file)
+            : 'None';
 
         // Update scroll container with file queue status
         if (filesList && filesList.length > 0) {
@@ -452,17 +498,20 @@
             if (scrollContainer) {
                 const currentFile = p.current_file;
                 const currentIndex = filesList.indexOf(currentFile);
-                
+
                 // Get the list of failed file names
                 const failedFileNames = (p.failed_files || []).map(ff => ff.file);
-                
+
                 scrollContainer.innerHTML = filesList.map((filename, idx) => {
                     let statusHtml = '';
                     let itemStyle = 'display:flex; justify-content:space-between; align-items:center; padding: 4px 8px; border-radius: 4px;';
-                    
+
                     if (failedFileNames.includes(filename)) {
                         statusHtml = `<span style="color:var(--red); font-weight:bold;"><i class="bi bi-x-circle-fill"></i> Failed</span>`;
                         itemStyle += 'background: rgba(239, 83, 80, 0.1); border: 1px solid rgba(239, 83, 80, 0.2);';
+                    } else if (filename === currentFile && isCompressing) {
+                        statusHtml = `<span style="color:var(--amber); font-weight:bold;"><i class="bi bi-gear-fill" style="display:inline-block; animation:sv-spin 1.5s linear infinite;"></i> Compressing...</span>`;
+                        itemStyle += 'background: rgba(255, 171, 64, 0.15); border: 1px solid rgba(255, 171, 64, 0.3);';
                     } else if (filename === currentFile) {
                         statusHtml = `<span style="color:var(--accent); font-weight:bold;"><i class="bi bi-arrow-repeat" style="display:inline-block; animation:sv-spin 1s linear infinite;"></i> Syncing...</span>`;
                         itemStyle += 'background: rgba(255, 171, 64, 0.1); border: 1px solid rgba(255, 171, 64, 0.2);';
@@ -564,11 +613,20 @@
         title.textContent = 'Sync Completion Report';
         title.className = 'sv-report-title success';
 
+        const originalGb = c.total_original_gb || 0;
+        const uploadedGb = c.total_uploaded_gb || 0;
+        const savedPct = originalGb > 0 ? Math.max(0, Math.round((1 - uploadedGb / originalGb) * 100)) : 0;
+        const compressionRow = originalGb > 0 && uploadedGb < originalGb
+            ? `<div class="report-stat-row"><span>Compression:</span> <span class="val green">${savedPct}% smaller</span></div>`
+            : '';
+
         stats.innerHTML = `
             <div class="report-stat-row"><span>Status:</span> <span class="val green">Completed</span></div>
             <div class="report-stat-row"><span>Total Files:</span> <span class="val">${c.files_uploaded} uploaded</span></div>
             <div class="report-stat-row"><span>Failed Files:</span> <span class="val">${c.files_failed || 0} failed</span></div>
-            <div class="report-stat-row"><span>Uploaded Size:</span> <span class="val">${(c.total_uploaded_gb || 0).toFixed(2)} GB</span></div>
+            <div class="report-stat-row"><span>Original Size:</span> <span class="val">${originalGb.toFixed(2)} GB</span></div>
+            <div class="report-stat-row"><span>Uploaded Size:</span> <span class="val">${uploadedGb.toFixed(2)} GB</span></div>
+            ${compressionRow}
             <div class="report-stat-row"><span>Time Elapsed:</span> <span class="val">${c.duration_minutes || 0} mins</span></div>
             <div class="report-stat-row"><span>Local Space Cleared:</span> <span class="val">${c.local_files_deleted || 0} files deleted</span></div>`;
 
