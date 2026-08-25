@@ -12,4 +12,8 @@ recordings/
 *.log.*
 auto.crt
 auto.key
+event_token.json
 surveillance-dashboard/
+ai/.venv/
+ai/snapshots/
+*.pt

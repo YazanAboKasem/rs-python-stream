@@ -42,6 +42,7 @@ for arg in sys.argv:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 MEDIAMTX_CONFIG = os.path.join(SCRIPT_DIR, "mediamtx.yml")
 CAMERAS_CONFIG_JSON = os.path.join(SCRIPT_DIR, "cameras_config.json")
+EVENT_TOKEN_JSON = os.path.join(SCRIPT_DIR, "event_token.json")
 PATHS_MARKER = "paths:"
 
 
@@ -158,12 +159,23 @@ def write_cameras_config_json(cameras: list):
             "rtsp_port": cam.get("rtsp_port", 554),
             "ptz": bool(cam.get("ptz")),
             "label": cam.get("label"),
+            "role": cam.get("role"),  # FRONT | REAR_FIXED | REAR_PTZ | None
         }
 
     with open(CAMERAS_CONFIG_JSON, "w") as f:
         json.dump(data, f, indent=2)
 
     log(f"cameras_config.json written ({len(data)} camera(s)).")
+
+
+def write_event_token_json(token):
+    # Dedicated per-device credential for POST /api/surveillance/events —
+    # kept separate from cameras_config.json since it's not camera data.
+    if not token:
+        return
+    with open(EVENT_TOKEN_JSON, "w") as f:
+        json.dump({"event_api_token": token}, f, indent=2)
+    log("event_token.json written.")
 
 
 def main():
@@ -186,6 +198,7 @@ def main():
 
     write_cameras_config_json(cameras)
     rewrite_mediamtx_yml(cameras)
+    write_event_token_json(result.get("event_api_token"))
 
 
 if __name__ == "__main__":

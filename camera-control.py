@@ -1194,7 +1194,9 @@ def on_message(ws, message):
         speed = data.get("speed", 3)
         
         success, error = execute_ptz(camera_id, {"action": action, "speed": speed})
-        
+        if not success:
+            log.error(f"[{camera_id}] PTZ command failed: {error}")
+
         send_ws_event(ws, "ptz.command.ack", {
             "camera_id": camera_id,
             "command_id": command_id,
