@@ -27,38 +27,35 @@ recordPath: ./recordings/%path/%Y-%m-%d/%H-%M-%S
 recordFormat: fmp4
 
 paths:
-  # ── Camera 1 — 192.168.1.64 ─────────────────────────────────────────────
-  cam1:                           # HD  ~2-6 Mbps  (1080p/720p full FPS)
-    source: rtsp://admin:hikvision%4012@192.168.1.64:554/Streaming/Channels/101
-    sourceProtocol: tcp
-    record: yes
-
-  cam1_sub:                       # SD  ~300-800 Kbps  (sub stream from camera)
-    source: rtsp://admin:hikvision%4012@192.168.1.64:554/Streaming/Channels/102
-    sourceProtocol: tcp
-
-  # ── Camera 2 — 192.168.1.65 ─────────────────────────────────────────────
-  cam2:                           # HD  ~2-6 Mbps
-    source: rtsp://admin:hikvision%4012@192.168.1.65:554/Streaming/Channels/101
-    sourceProtocol: tcp
-    record: yes
-
-  cam2_sub:                       # SD  ~300-800 Kbps
-    source: rtsp://admin:hikvision%4012@192.168.1.65:554/Streaming/Channels/102
-    sourceProtocol: tcp
-
-  # ── Camera 3 — 192.168.1.165 (Rear View — Non-Hikvision) ─────────────────
-  # KNOWN ISSUE: this camera's Main (H265) stream has a corrupt bitstream
-  # ("invalid DeltaPocS0" in mediamtx logs), which forces the recorder to
-  # restart every few seconds -> short recording files. Recording from
-  # Main anyway per requirement (highest quality). Real fix is on the
-  # camera itself — see if its admin UI lets Channel 0 be switched from
-  # H265 to H264, or check for a firmware update.
-  cam3:                           # Main  (channel /0)
+  # ── front (None) — synced from dashboard ──
+  cam1:
     source: rtsp://admin:12345@192.168.1.165:8554/0
     sourceProtocol: tcp
     record: yes
 
-  cam3_sub:                       # Sub  (channel /1)
+  cam1_sub:
     source: rtsp://admin:12345@192.168.1.165:8554/1
     sourceProtocol: tcp
+    record: yes
+
+  # ── back (None) — synced from dashboard ──
+  cam2:
+    source: rtsp://admin:hikvision@12@192.168.1.64:554/Streaming/Channels/101
+    sourceProtocol: tcp
+    record: yes
+
+  cam2_sub:
+    source: rtsp://admin:hikvision@12@192.168.1.64:554/Streaming/Channels/102
+    sourceProtocol: tcp
+    record: yes
+
+  # ── cam3 (None) — synced from dashboard ──
+  cam3:
+    source: rtsp://:554/Streaming/Channels/101
+    sourceProtocol: tcp
+    record: yes
+
+  cam3_sub:
+    source: rtsp://:554/Streaming/Channels/102
+    sourceProtocol: tcp
+    record: yes

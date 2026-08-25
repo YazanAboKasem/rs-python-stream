@@ -61,7 +61,7 @@
                         <i class="bi bi-cpu-fill"></i>
                         <span>Devices</span>
                         @php
-                            $deviceCount = count(collect(config('surveillance.devices', []))->where('enabled', true));
+                            $deviceCount = app(\App\Services\DeviceRegistry::class)->registeredDevices()->count();
                         @endphp
                         <span class="sv-nav-badge">{{ $deviceCount }}</span>
                     </a>
@@ -144,7 +144,7 @@
                         SYSTEM ONLINE
                     </div>
                     @php
-                        $allDevices = collect(config('surveillance.devices', []))->where('enabled', true);
+                        $allDevices = app(\App\Services\DeviceRegistry::class)->registeredDevices();
                     @endphp
                     @foreach($allDevices as $dev)
                     <div class="sv-status-pill offline" id="jetson-status-pill-{{ $dev['id'] }}">
@@ -194,10 +194,42 @@
         // Restore sidebar state
         (function() {
             const saved = localStorage.getItem('sv-sidebar-collapsed');
-            if (saved === '1') {
+            const isMobile = window.matchMedia('(max-width: 1024px)').matches;
+            // On mobile, default to collapsed unless the user explicitly opened it last time
+            if (saved === '1' || (saved === null && isMobile)) {
                 document.getElementById('sv-layout').classList.add('sv-sidebar-collapsed');
             }
         })();
+
+        // Auto-collapse when the sidebar is left open and the viewport crosses into mobile
+        (function() {
+            const mq = window.matchMedia('(max-width: 1024px)');
+            mq.addEventListener('change', (e) => {
+                if (e.matches) {
+                    document.getElementById('sv-layout').classList.add('sv-sidebar-collapsed');
+                }
+            });
+        })();
+
+        // Close the sidebar after navigating on mobile (tapping a link)
+        document.addEventListener('click', function (e) {
+            const link = e.target.closest('.sv-nav-link[href]:not([href="#"])');
+            if (!link) return;
+            if (window.matchMedia('(max-width: 1024px)').matches) {
+                document.getElementById('sv-layout').classList.add('sv-sidebar-collapsed');
+            }
+        });
+
+        // Tapping the dimmed backdrop (outside the sidebar) closes it on mobile
+        document.getElementById('sv-layout').addEventListener('click', function (e) {
+            if (!window.matchMedia('(max-width: 1024px)').matches) return;
+            const layout = document.getElementById('sv-layout');
+            if (layout.classList.contains('sv-sidebar-collapsed')) return;
+            const sidebar = document.getElementById('sv-nav-sidebar');
+            if (!sidebar.contains(e.target) && !e.target.closest('#sv-sidebar-toggle')) {
+                layout.classList.add('sv-sidebar-collapsed');
+            }
+        });
 
         // ── System panel toggle ─────────────────────────────────────
         function toggleSystemPanel(e) {

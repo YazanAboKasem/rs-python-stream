@@ -16,7 +16,7 @@ class JetsonStatusController extends Controller
     }
 
     /**
-     * GET /api/surveillance/jetson/status
+     * GET /api/surveillance/jetson/status?device_id=rock1
      */
     public function status(Request $request): JsonResponse
     {
@@ -24,13 +24,19 @@ class JetsonStatusController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
+        $deviceId = $request->query('device_id');
+        if (empty($deviceId)) {
+            return response()->json(['error' => 'device_id is required'], 422);
+        }
+
         return response()->json(
-            $this->wsService->getConnectionInfo()
+            $this->wsService->getConnectionInfo($deviceId)
         );
     }
 
     /**
      * POST /api/surveillance/jetson/reboot
+     * Body: { "device_id": "rock1" }
      */
     public function reboot(Request $request): JsonResponse
     {
@@ -38,18 +44,23 @@ class JetsonStatusController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        if (! $this->wsService->isOnline()) {
+        $deviceId = $request->input('device_id');
+        if (empty($deviceId)) {
+            return response()->json(['error' => 'device_id is required'], 422);
+        }
+
+        if (! $this->wsService->isOnline($deviceId)) {
             return response()->json([
                 'success' => false,
-                'error' => 'Jetson is offline. Cannot send reboot command.'
+                'error' => 'Device is offline. Cannot send reboot command.'
             ], 400);
         }
 
-        $this->wsService->sendReboot();
+        $this->wsService->sendReboot($deviceId);
 
         return response()->json([
             'success' => true,
-            'message' => 'Reboot command sent to Jetson.'
+            'message' => "Reboot command sent to {$deviceId}."
         ]);
     }
 

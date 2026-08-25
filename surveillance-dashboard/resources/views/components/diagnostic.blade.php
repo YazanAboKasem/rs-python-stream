@@ -1,4 +1,4 @@
-<div id="sv-diagnostic-panel" class="sv-diagnostic-panel hidden">
+<div id="sv-diagnostic-panel" class="sv-diagnostic-panel hidden" data-device-id="{{ $deviceId ?? '' }}">
     <div class="sv-panel-header">
         <div class="sv-panel-header-title">
             <i class="bi bi-cpu-fill panel-header-icon"></i>
@@ -15,6 +15,22 @@
     </div>
 
     <div class="sv-panel-grid">
+        <!-- Device Resources (CPU / RAM / Temperature) -->
+        <div class="sv-panel-card" id="diag-card-resources">
+            <div class="sv-card-header-sub">
+                <i class="bi bi-speedometer2"></i>
+                Device Resources
+                <span class="sv-text-muted" id="diag-resources-updated" style="margin-left:auto;font-size:11px;font-weight:400"></span>
+            </div>
+            <div class="sv-card-body-sub">
+                <div class="sv-resource-grid" id="diag-resources-list">
+                    <div class="sv-diagnostic-loading">
+                        <div class="sv-spinner-sm"></div> Reading device sensors...
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Cameras Status -->
         <div class="sv-panel-card" id="diag-card-cameras">
             <div class="sv-card-header-sub">

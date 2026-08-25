@@ -18,6 +18,7 @@ class DiagnosticController extends Controller
 
     /**
      * POST /api/surveillance/diagnostic/start
+     * Body: { "device_id": "rock1" }
      */
     public function start(Request $request): JsonResponse
     {
@@ -25,33 +26,40 @@ class DiagnosticController extends Controller
             return response()->json(['error' => 'Unauthorized'], 401);
         }
 
-        if (! $this->wsService->isOnline()) {
+        $deviceId = $request->input('device_id');
+        if (empty($deviceId)) {
+            return response()->json(['error' => 'device_id is required'], 422);
+        }
+
+        if (! $this->wsService->isOnline($deviceId)) {
             return response()->json([
                 'success' => false,
-                'error' => 'Jetson is offline. Cannot run diagnostics.'
+                'error' => 'Device is offline. Cannot run diagnostics.'
             ], 400);
         }
 
         $requestId = 'diag_' . uniqid();
-        
-        // Trigger diagnostic checks on Jetson
-        $this->wsService->sendDiagnosticStart($requestId);
+
+        // Trigger diagnostic checks on the target device only
+        $this->wsService->sendDiagnosticStart($deviceId, $requestId);
 
         return response()->json([
             'success' => true,
             'request_id' => $requestId,
-            'message' => 'Diagnostic checks triggered on Jetson.'
+            'message' => 'Diagnostic checks triggered.'
         ]);
     }
 
     /**
-     * GET /api/surveillance/diagnostic/status/{requestId}
+     * GET /api/surveillance/diagnostic/status/{requestId}?device_id=rock1
      */
     public function status(Request $request, string $requestId): JsonResponse
     {
         if (! $this->isAuthorized($request)) {
             return response()->json(['error' => 'Unauthorized'], 401);
         }
+
+        $deviceId = $request->query('device_id');
 
         // Retrieve stashed responses from cache
         $cameraStatus = Cache::get("ws_response_diagnostic.camera_status_{$requestId}");
@@ -61,7 +69,7 @@ class DiagnosticController extends Controller
 
         return response()->json([
             'request_id' => $requestId,
-            'jetson_online' => $this->wsService->isOnline(),
+            'jetson_online' => $deviceId ? $this->wsService->isOnline($deviceId) : null,
             'cameras' => $cameraStatus,
             'streams' => $streamStatus,
             'tunnel' => $tunnelStatus,

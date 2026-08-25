@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\DeviceRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -24,6 +25,10 @@ class CameraController extends Controller
     const TOKEN_CACHE_KEY = 'surveillance_tunnel_hls_url'; // reuse TunnelController constant
     const CMD_QUEUE_TTL = 60 * 5;  // 5 minutes
     const STATUS_TTL = 60 * 60; // 1 hour
+
+    public function __construct(private DeviceRegistry $deviceRegistry)
+    {
+    }
 
     // ── PTZ Actions ──────────────────────────────────────────────────────────
     const VALID_ACTIONS = [
@@ -83,11 +88,18 @@ class CameraController extends Controller
 
         \Log::info('[PTZ] Command queued', $command);
 
-        // Send via WebSocket instantly
+        // Send via WebSocket instantly — targeted at the owning device only,
+        // using the device's own raw camera id (e.g. "cam1", not "rock1-cam1")
+        // since that's what the agent's local CAMERAS dict uses.
         try {
-            $wsService = app(\App\Services\JetsonWebSocketService::class);
-            $wsService->sendPtzCommand($cameraId, $command['id'], $action, $command['speed']);
-            \Log::info('[PTZ] Command sent via WebSocket', ['camera_id' => $cameraId, 'action' => $action]);
+            [$deviceId, $rawCameraId] = $this->resolveDeviceAndRawId($cameraId);
+            if ($deviceId) {
+                $wsService = app(\App\Services\JetsonWebSocketService::class);
+                $wsService->sendPtzCommand($deviceId, $rawCameraId, $command['id'], $action, $command['speed']);
+                \Log::info('[PTZ] Command sent via WebSocket', ['device_id' => $deviceId, 'camera_id' => $rawCameraId, 'action' => $action]);
+            } else {
+                \Log::warning('[PTZ] Could not resolve owning device for camera, WS push skipped (HTTP poll fallback still applies)', ['camera_id' => $cameraId]);
+            }
         } catch (\Exception $e) {
             \Log::error('[PTZ] Failed to send command via WebSocket: ' . $e->getMessage());
         }
@@ -223,25 +235,28 @@ class CameraController extends Controller
 
         \Log::info('[Surveillance] Settings updated', array_merge(['camera_id' => $cameraId], $settings));
 
-        // Send via WebSocket instantly
+        // Send via WebSocket instantly — targeted only at the device that
+        // owns this camera, using its raw camera id.
         try {
-            $camerasConfig = config('surveillance.cameras', []);
-            $allSettings = [];
-            foreach ($camerasConfig as $cam) {
-                if (!($cam['enabled'] ?? false)) {
-                    continue;
+            [$deviceId, $rawCameraId] = $this->resolveDeviceAndRawId($cameraId);
+            if ($deviceId) {
+                $device = $this->deviceRegistry->find($deviceId);
+                $allSettings = [];
+                foreach ($device['cameras'] ?? [] as $cam) {
+                    $id = $cam['id'];
+                    $camSettings = ($id === $rawCameraId) ? $settings : Cache::get("camera_settings_{$deviceId}-{$id}", Cache::get("camera_settings_{$id}"));
+                    $allSettings[$id] = [
+                        'quality' => $camSettings['quality'] ?? 'hd',
+                        'fps' => (int) ($camSettings['fps'] ?? 15),
+                    ];
                 }
-                $id = $cam['id'];
-                $camSettings = ($id === $cameraId) ? $settings : Cache::get("camera_settings_{$id}");
-                $allSettings[$id] = [
-                    'quality' => $camSettings['quality'] ?? 'hd',
-                    'fps' => (int) ($camSettings['fps'] ?? 15),
-                ];
-            }
 
-            $wsService = app(\App\Services\JetsonWebSocketService::class);
-            $wsService->sendSettingsUpdate($allSettings);
-            \Log::info('[Surveillance] Settings update pushed via WebSocket', $allSettings);
+                $wsService = app(\App\Services\JetsonWebSocketService::class);
+                $wsService->sendSettingsUpdate($deviceId, $allSettings);
+                \Log::info('[Surveillance] Settings update pushed via WebSocket', ['device_id' => $deviceId] + $allSettings);
+            } else {
+                \Log::warning('[Surveillance] Could not resolve owning device for camera, WS push skipped', ['camera_id' => $cameraId]);
+            }
         } catch (\Exception $e) {
             \Log::error('[Surveillance] Failed to push settings via WebSocket: ' . $e->getMessage());
         }
@@ -304,9 +319,39 @@ class CameraController extends Controller
         return $authorized;
     }
 
+    /**
+     * Resolve a dashboard camera id (raw "cam1" or composite "rock1-cam1")
+     * to [device_id, raw_camera_id] so WS commands can be targeted at the
+     * correct device using the id its own agent actually recognizes.
+     * Returns [null, $id] if no owning device can be determined.
+     */
+    private function resolveDeviceAndRawId(string $id): array
+    {
+        $devices = $this->deviceRegistry->registeredDevices();
+        foreach ($devices as $d) {
+            foreach ($d['cameras'] ?? [] as $cam) {
+                if ("{$d['id']}-{$cam['id']}" === $id) {
+                    return [$d['id'], $cam['id']];
+                }
+            }
+        }
+        // Not a composite id — can't tell which device owns it from the id alone.
+        return [null, $id];
+    }
+
     private function findCamera(string $id): ?array
     {
-        return collect(config('surveillance.cameras'))
-            ->firstWhere('id', $id);
+        $devices = $this->deviceRegistry->registeredDevices();
+        if (!empty($devices)) {
+            foreach ($devices as $d) {
+                foreach ($d['cameras'] ?? [] as $cam) {
+                    if ($cam['id'] === $id || "{$d['id']}-{$cam['id']}" === $id) {
+                        return $cam;
+                    }
+                }
+            }
+        }
+
+        return collect(config('surveillance.cameras', []))->firstWhere('id', $id);
     }
 }

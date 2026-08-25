@@ -7,62 +7,75 @@ use Illuminate\Support\Facades\Cache;
 class JetsonWebSocketService
 {
     /**
-     * Check if Jetson is online.
+     * Check if a specific device is online.
+     * $deviceId must be the real device id (e.g. 'rock1', 'jetson-2') —
+     * there is no safe single-device default on a multi-device fleet.
      */
-    public function isOnline(): bool
+    public function isOnline(string $deviceId): bool
     {
-        return (bool) Cache::get('jetson_ws_online', false);
+        return (bool) Cache::get("jetson_ws_online_{$deviceId}", false);
     }
 
     /**
-     * Send event to Jetson via WebSocket outbound queue.
+     * Send event to a specific device via the WebSocket outbound queue.
+     * The event carries 'target_device' so every connected agent can ignore
+     * commands that aren't addressed to it (the WS server broadcasts to all
+     * open connections; filtering happens on each agent).
      */
-    public function sendEvent(string $event, array $data): void
+    public function sendEvent(string $event, string $deviceId, array $data): void
     {
         $queue = Cache::get('ws_outbound_queue', []);
         $queue[] = [
             'event' => $event,
-            'data' => $data
+            'data'  => array_merge($data, ['target_device' => $deviceId]),
         ];
         Cache::put('ws_outbound_queue', $queue, 86400);
     }
 
     /**
-     * Get Connection info (cameras, version, last heartbeat).
+     * Get connection info (cameras, version, last heartbeat) for a device.
      */
-    public function getConnectionInfo(): array
+    public function getConnectionInfo(string $deviceId): array
     {
         return [
-            'online' => $this->isOnline(),
-            'cameras' => Cache::get('jetson_ws_cameras', []),
-            'version' => Cache::get('jetson_ws_version', 'unknown'),
-            'last_heartbeat' => Cache::get('jetson_ws_last_heartbeat'),
+            'online' => $this->isOnline($deviceId),
+            'cameras' => Cache::get("jetson_ws_cameras_{$deviceId}", []),
+            'version' => Cache::get("jetson_ws_version_{$deviceId}", 'unknown'),
+            'last_heartbeat' => Cache::get("jetson_ws_last_heartbeat_{$deviceId}"),
         ];
     }
 
     /**
-     * Mark Jetson as online (called from HTTP requests).
+     * Mark a device as online (HTTP polling fallback path).
+     * Callers that don't know which device made the request (e.g. the
+     * shared-token PTZ/settings poll endpoints) may omit $deviceId; this
+     * only feeds the legacy HTTP-fallback online indicator, not any
+     * targeted command, so an ambiguous default here is harmless.
      */
-    public function markOnline(\Illuminate\Http\Request $request): void
+    public function markOnline(\Illuminate\Http\Request $request, string $deviceId = 'rock1'): void
     {
-        Cache::put('jetson_ws_online', true, 15); // short TTL for polling fallback
-        Cache::put('jetson_ws_last_heartbeat', now()->timestamp, 15);
+        Cache::put("jetson_ws_online_{$deviceId}", true, 15); // short TTL for polling fallback
+        Cache::put("jetson_ws_last_heartbeat_{$deviceId}", now()->timestamp, 15);
 
         if ($request->hasHeader('X-Cameras')) {
             $cameras = explode(',', $request->header('X-Cameras'));
-            Cache::put('jetson_ws_cameras', $cameras, 86400);
+            Cache::put("jetson_ws_cameras_{$deviceId}", $cameras, 86400);
         }
         if ($request->hasHeader('X-Version')) {
-            Cache::put('jetson_ws_version', $request->header('X-Version'), 86400);
+            Cache::put("jetson_ws_version_{$deviceId}", $request->header('X-Version'), 86400);
         }
     }
 
     /**
      * Send PTZ command via WS.
+     * NOTE: $cameraId here is the dashboard's composite id (e.g. "rock1-cam1").
+     * The device's own CAMERAS dict on the agent only knows the raw id
+     * ("cam1"), so this already never matches across devices — see
+     * KNOWN_ISSUES.md for the follow-up to normalize this properly.
      */
-    public function sendPtzCommand(string $cameraId, string $commandId, string $action, int $speed): void
+    public function sendPtzCommand(string $deviceId, string $cameraId, string $commandId, string $action, int $speed): void
     {
-        $this->sendEvent('ptz.command', [
+        $this->sendEvent('ptz.command', $deviceId, [
             'camera_id' => $cameraId,
             'command_id' => $commandId,
             'action' => $action,
@@ -73,31 +86,31 @@ class JetsonWebSocketService
     /**
      * Send settings update.
      */
-    public function sendSettingsUpdate(array $cameras): void
+    public function sendSettingsUpdate(string $deviceId, array $cameras): void
     {
-        $this->sendEvent('settings.update', [
+        $this->sendEvent('settings.update', $deviceId, [
             'cameras' => $cameras
         ]);
     }
 
     /**
-     * Send diagnostic start command.
+     * Send diagnostic start command to a specific device.
      */
-    public function sendDiagnosticStart(string $requestId, array $checks = ['cameras', 'streams', 'tunnel', 'logs']): void
+    public function sendDiagnosticStart(string $deviceId, string $requestId, array $checks = ['cameras', 'streams', 'tunnel', 'logs']): void
     {
-        $this->sendEvent('diagnostic.start', [
+        $this->sendEvent('diagnostic.start', $deviceId, [
             'checks' => $checks,
             'request_id' => $requestId
         ]);
     }
 
     /**
-     * Send sync start command.
+     * Send sync start command to a specific device.
      * VPS config contains: upload_url, token
      */
-    public function sendSyncStart(string $requestId, array $vpsConfig, array $options): void
+    public function sendSyncStart(string $deviceId, string $requestId, array $vpsConfig, array $options): void
     {
-        $this->sendEvent('sync.start', [
+        $this->sendEvent('sync.start', $deviceId, [
             'request_id' => $requestId,
             'vps' => $vpsConfig,
             'options' => $options
@@ -105,11 +118,11 @@ class JetsonWebSocketService
     }
 
     /**
-     * Send sync list files command.
+     * Send sync list files command to a specific device.
      */
-    public function sendSyncListFiles(string $requestId, array $options): void
+    public function sendSyncListFiles(string $deviceId, string $requestId, array $options): void
     {
-        $this->sendEvent('sync.list_files', [
+        $this->sendEvent('sync.list_files', $deviceId, [
             'request_id' => $requestId,
             'options' => $options
         ]);
@@ -139,10 +152,10 @@ class JetsonWebSocketService
     }
 
     /**
-     * Send reboot command.
+     * Send reboot command to a specific device.
      */
-    public function sendReboot(): void
+    public function sendReboot(string $deviceId): void
     {
-        $this->sendEvent('jetson.reboot', []);
+        $this->sendEvent('jetson.reboot', $deviceId, []);
     }
 }

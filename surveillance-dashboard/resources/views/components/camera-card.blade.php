@@ -18,14 +18,14 @@
 @props(['camera'])
 
 @php
-    $id        = $camera['id'];
+    $rawId     = $camera['id'];
+    $deviceId  = $camera['device_id'] ?? '';
+    $id        = $deviceId ? "{$deviceId}-{$rawId}" : $rawId;
     $hasPtz    = $camera['ptz'] ?? false;
     $camIp     = $camera['ip'] ?? '';
-    $hlsHd     = $camera['hls_url_hd']    ?? $camera['hls_url'];
-    $hlsSd     = $camera['hls_url_sd']    ?? $camera['hls_url'];
-    $hlsUltra  = $camera['hls_url_ultra'] ?? $camera['hls_url_sd'] ?? $camera['hls_url'];
-    $hlsLive   = $camera['hls_url_live']   ?? $camera['hls_url'];
-    $currQuality = $camera['current_quality'] ?? 'hd';
+    $hlsHd     = $camera['hls_url_hd'] ?? $camera['hls_url'];
+    $hlsSd     = $camera['hls_url_sd'] ?? $camera['hls_url'];
+    $currQuality = $camera['current_quality'] ?? 'sd';
     $currFps   = (int) ($camera['current_fps'] ?? 15);
 @endphp
 
@@ -37,7 +37,7 @@
             <i class="bi bi-camera-video sv-card-icon"></i>
             <div>
                 <div class="sv-card-title">{{ $camera['label'] }}</div>
-                <div class="sv-card-id">{{ $id }} · {{ $camIp ?: 'local' }}</div>
+                <div class="sv-card-id">{{ $rawId }} · {{ $camIp ?: 'local' }}</div>
             </div>
         </div>
 
@@ -78,11 +78,9 @@
             id="player-{{ $id }}"
             class="sv-video"
             data-camera-id="{{ $id }}"
-            data-hls-url="{{ $hlsLive }}"
+            data-hls-url="{{ $currQuality === 'hd' ? $hlsHd : $hlsSd }}"
             data-hls-url-hd="{{ $hlsHd }}"
             data-hls-url-sd="{{ $hlsSd }}"
-            data-hls-url-ultra="{{ $hlsUltra }}"
-            data-hls-url-live="{{ $hlsLive }}"
             data-current-quality="{{ $currQuality }}"
             data-current-fps="{{ $currFps }}"
             data-webrtc-url="{{ $camera['webrtc_url'] }}"
@@ -129,17 +127,13 @@
             <div class="sv-ctrl-row">
                 <span class="sv-ctrl-label">Quality</span>
                 <div class="sv-quality-btns" id="quality-btns-{{ $id }}">
-                    <button class="sv-quality-btn{{ $currQuality === 'hd' ? ' active' : '' }}" data-quality="hd"    data-camera="{{ $id }}" title="HD Main stream (~2-6 Mbps)">
-                        HD
-                        <span class="sv-quality-hint">~5Mbps</span>
-                    </button>
-                    <button class="sv-quality-btn{{ $currQuality === 'sd' ? ' active' : '' }}" data-quality="sd"    data-camera="{{ $id }}" title="SD Sub stream (~300-800 Kbps)">
-                        SD
+                    <button class="sv-quality-btn{{ $currQuality === 'sd' ? ' active' : '' }}" data-quality="sd" data-camera="{{ $id }}" title="Sub stream — native, lowest resource usage (default)">
+                        Sub
                         <span class="sv-quality-hint">~500K</span>
                     </button>
-                    <button class="sv-quality-btn{{ $currQuality === 'ultra' ? ' active' : '' }}" data-quality="ultra" data-camera="{{ $id }}" title="Ultra-low: 360p @ 5fps (~150 Kbps) — requires FFmpeg">
-                        Ultra
-                        <span class="sv-quality-hint">~150K</span>
+                    <button class="sv-quality-btn{{ $currQuality === 'hd' ? ' active' : '' }}" data-quality="hd" data-camera="{{ $id }}" title="Main stream — native full quality (~2-6 Mbps)">
+                        Main
+                        <span class="sv-quality-hint">~5Mbps</span>
                     </button>
                 </div>
             </div>

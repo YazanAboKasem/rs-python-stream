@@ -4,7 +4,7 @@
  * Features:
  *   1. HLS.js / Native HLS with patient retry
  *   2. Live stats (bitrate, FPS, buffer, resolution)
- *   3. Quality switching HD / SD / Ultra
+ *   3. Quality switching: Sub (default) / Main — both native MediaMTX streams
  *   4. FPS limiter (canvas-based)
  *   5. Digital zoom (CSS transform)
  *   6. PTZ command queue (Laravel API)
@@ -59,7 +59,7 @@
         }
 
         // Initialize state from server-rendered attributes
-        video.dataset.currentQuality = video.dataset.currentQuality || 'hd';
+        video.dataset.currentQuality = video.dataset.currentQuality || 'sd';
         video.dataset.currentFps     = video.dataset.currentFps || '15';
 
         // Mixed-content guard
@@ -91,6 +91,17 @@
                 showOverlay(card, 'Connecting…');
                 setLive(card, false);
             });
+
+            video.onplaying = () => {
+                hideOverlay(card);
+                setLive(card, true);
+            };
+            video.ontimeupdate = () => {
+                if (video.currentTime > 0) {
+                    hideOverlay(card);
+                    setLive(card, true);
+                }
+            };
 
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
                 hideOverlay(card);
@@ -292,16 +303,21 @@
         const lbl = card.querySelector(`#stat-quality-label-${camId} span`);
         if (lbl) lbl.textContent = quality.toUpperCase();
 
-        // Show loading overlay
-        showOverlay(card, `Adjusting stream parameters…`);
-        setLive(card, false);
-
         // Reset stats
         ['stat-bitrate', 'stat-fps', 'stat-buffer', 'stat-res'].forEach(k => {
             setStatVal(card, `${k}-${camId}`, '–', 'muted');
         });
 
-        // Send settings to Laravel API
+        // Sub/Main are both native MediaMTX streams (no FFmpeg re-encode on the
+        // device), so switching quality is just an instant source swap.
+        showOverlay(card, `Switching to ${quality.toUpperCase()}…`);
+        setLive(card, false);
+
+        const url = quality === 'hd' ? video.dataset.hlsUrlHd : video.dataset.hlsUrlSd;
+        const urlWithBuster = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
+        startHLS(video, urlWithBuster, card, camId, 0, 0);
+
+        // Persist the choice server-side (best-effort, non-blocking)
         fetch(`/api/surveillance/cameras/${camId}/settings`, {
             method: 'POST',
             headers: {
@@ -310,42 +326,7 @@
                 'X-CSRF-TOKEN':  csrf,
             },
             body: JSON.stringify({ quality, fps }),
-        })
-        .then(r => {
-            if (!r.ok) throw new Error(`HTTP error ${r.status}`);
-            return r.json();
-        })
-        .then(data => {
-            if (data.success) {
-                console.log(`[StreamPlayer] Server received settings for ${camId}. Reloading stream in 6s...`);
-                
-                let remaining = 6;
-                showOverlay(card, `Restarting transcoder… (${remaining}s)`);
-                const countdown = setInterval(() => {
-                    remaining--;
-                    if (remaining > 0) {
-                        showOverlay(card, `Restarting transcoder… (${remaining}s)`);
-                    } else {
-                        clearInterval(countdown);
-                    }
-                }, 1000);
-
-                // Wait for local FFmpeg to restart and feed MediaMTX
-                setTimeout(() => {
-                    clearInterval(countdown);
-                    const url = video.dataset.hlsUrlLive || video.dataset.hlsUrl;
-                    const urlWithBuster = url.includes('?') ? `${url}&t=${Date.now()}` : `${url}?t=${Date.now()}`;
-                    startHLS(video, urlWithBuster, card, camId, 0, 0);
-                }, 6000);
-            } else {
-                console.warn('[StreamPlayer] Failed to apply settings:', data);
-                showOverlay(card, '⚠️ Settings error — check token', 'error');
-            }
-        })
-        .catch(err => {
-            console.error('[StreamPlayer] Network error:', err);
-            showOverlay(card, '⚠️ Connection error', 'error');
-        });
+        }).catch(err => console.warn('[StreamPlayer] Failed to persist settings:', err));
     }
 
     // ─── Digital Zoom ─────────────────────────────────────────────────────────

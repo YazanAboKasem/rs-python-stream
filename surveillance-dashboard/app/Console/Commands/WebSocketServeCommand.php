@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use App\WebSocket\JetsonWebSocketHandler;
+use App\Services\DeviceRegistry;
 use React\EventLoop\Loop;
 use React\Socket\SocketServer;
 use React\Socket\ConnectionInterface;
@@ -22,10 +23,11 @@ class WebSocketServeCommand extends Command
 
         $this->info("Starting WebSocket server on ws://{$host}:{$port}...");
 
-        $handler = new JetsonWebSocketHandler();
-        
-        // Reset online status on start for configured devices
-        foreach (config('surveillance.devices', []) as $device) {
+        $deviceRegistry = app(DeviceRegistry::class);
+        $handler = new JetsonWebSocketHandler($deviceRegistry);
+
+        // Reset online status on start for registered devices
+        foreach ($deviceRegistry->registeredDevices() as $device) {
             Cache::put("jetson_ws_online_{$device['id']}", false, 86400);
         }
         Cache::put('ws_outbound_queue', [], 86400);
@@ -91,13 +93,9 @@ class WebSocketServeCommand extends Command
         });
 
         // Periodic timer for heartbeat checks (every 5 seconds)
-        Loop::addPeriodicTimer(5.0, function () {
+        Loop::addPeriodicTimer(5.0, function () use ($deviceRegistry) {
             try {
-                $devices = config('surveillance.devices', []);
-                $deviceIds = collect($devices)->pluck('id')->toArray();
-                if (empty($deviceIds)) {
-                    $deviceIds = ['jetson-1']; // Fallback
-                }
+                $deviceIds = $deviceRegistry->registeredDevices()->pluck('id')->all();
 
                 foreach ($deviceIds as $deviceId) {
                     $isOnline = Cache::get("jetson_ws_online_{$deviceId}", false);

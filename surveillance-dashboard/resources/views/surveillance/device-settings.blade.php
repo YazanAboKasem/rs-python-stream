@@ -158,7 +158,7 @@
     </div>
 
     <!-- Diagnostics Panel (Test Mode) -->
-    <x-diagnostic />
+    <x-diagnostic :device-id="$device['id']" />
 
 
     {{-- Camera Streams --}}

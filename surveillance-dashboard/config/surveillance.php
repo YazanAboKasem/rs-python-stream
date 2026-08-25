@@ -15,7 +15,7 @@ return [
      * Asset version — bump this to bust browser cache on all devices.
      * Format: MAJOR.MINOR (e.g. 4.0 after any JS/CSS change)
      */
-    'asset_version' => '4.0',
+    'asset_version' => '4.8',
 
     /*
     |--------------------------------------------------------------------------
@@ -34,11 +34,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Jetson Devices Registry
+    | Devices — LEGACY, now DB-backed
     |--------------------------------------------------------------------------
     |
-    | Each Jetson device is a monitoring point with its own cameras.
-    | To add a new device: add an entry here and configure its .env variables.
+    | The `devices` array below is no longer read at runtime — see
+    | App\Services\DeviceRegistry, which queries the `devices` /
+    | `device_cameras` tables instead. New devices no longer need any entry
+    | here at all: they self-register (auto-generated id, see
+    | rs-python-stream/device_identity.py) and show up under "Discovered
+    | Devices" on the dashboard for one-click registration.
+    |
+    | This array only still exists as the source data for the one-time
+    | migration that seeded the `devices` table (see
+    | database/migrations/2026_08_16_000003_seed_existing_devices_from_config.php).
+    | Safe to delete once that migration has run in every environment.
     |
     | Keys per device:
     |   id              → unique slug (e.g. 'jetson-1')
@@ -66,7 +75,7 @@ return [
             'webrtc_port'     => env('JETSON1_WEBRTC_PORT', env('MEDIA_SERVER_WEBRTC_PORT', 8889)),
             'hls_base_url'    => env('JETSON1_HLS_URL', env('MEDIA_SERVER_HLS_URL')),
             'webrtc_base_url' => env('JETSON1_WEBRTC_URL', env('MEDIA_SERVER_WEBRTC_URL')),
-            'tunnel_cache_key' => 'surveillance_tunnel_hls_url',  // legacy key for backward compat
+            'tunnel_cache_key' => 'surveillance_tunnel_hls_url_rock1',
             'api_token'       => env('JETSON1_TOKEN', env('SURVEILLANCE_TOKEN')),
             'enabled'         => true,
             'cameras' => [
@@ -99,7 +108,7 @@ return [
                     'path_sub'   => 'cam3_sub',
                     'path_ultra' => 'cam3_ultra',
                     'path_live'  => 'cam3_live',
-                    'ip'         => '192.168.1.67',
+                    'ip'         => '192.168.1.165',
                     'enabled'    => true,
                     'ptz'        => true,
                 ],
@@ -147,7 +156,7 @@ return [
                     'path_sub'   => 'cam3_sub',
                     'path_ultra' => 'cam3_ultra',
                     'path_live'  => 'cam3_live',
-                    'ip'         => '192.168.1.67',
+                    'ip'         => '192.168.1.165',
                     'enabled'    => true,
                     'ptz'        => true,
                 ],
@@ -195,7 +204,7 @@ return [
             'path_sub'   => 'cam3_sub',
             'path_ultra' => 'cam3_ultra',
             'path_live'  => 'cam3_live',
-            'ip'         => '192.168.1.67',
+            'ip'         => '192.168.1.165',
             'enabled'    => true,
             'ptz'        => true,
         ],

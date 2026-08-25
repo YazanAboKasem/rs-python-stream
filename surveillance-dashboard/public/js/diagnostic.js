@@ -11,9 +11,11 @@
     let diagnosticStartTime = null;
     let receivedSections = { cameras: false, streams: false, tunnel: false, logs: false };
     let lastKnownJetsonOnline = null;
+    let resourcesInterval = null;
 
     const DIAGNOSTIC_TIMEOUT_MS = 20000; // 20 seconds before showing timeout error
     const POLL_INTERVAL_MS = 1500;
+    const RESOURCES_POLL_INTERVAL_MS = 5000;
 
     // Boot & Status Loop
     window.addEventListener('DOMContentLoaded', function () {
@@ -25,9 +27,11 @@
      * Poll Jetson WebSocket Status and update topbar indicator
      */
     window.updateJetsonStatus = function() {
+        const deviceId = document.getElementById('sv-diagnostic-panel')?.dataset.deviceId;
+        if (!deviceId) return; // not on a single-device page — nothing to poll
         const token = document.querySelector('meta[name="surveillance-token"]')?.content || '';
-        
-        fetch('/api/surveillance/jetson/status', {
+
+        fetch(`/api/surveillance/jetson/status?device_id=${encodeURIComponent(deviceId)}`, {
             headers: {
                 'Authorization': `Bearer ${token}`
             }
@@ -71,7 +75,12 @@
      * Reboot Jetson via Laravel WS API
      */
     window.rebootJetson = function() {
-        if (!confirm('Are you sure you want to reboot the Jetson system? This will interrupt the live streams for a couple of minutes.')) {
+        const deviceId = document.getElementById('sv-diagnostic-panel')?.dataset.deviceId;
+        if (!deviceId) {
+            alert('Cannot determine which device to reboot.');
+            return;
+        }
+        if (!confirm(`Are you sure you want to reboot ${deviceId}? This will interrupt its live streams for a couple of minutes.`)) {
             return;
         }
 
@@ -90,7 +99,8 @@
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`,
                 'X-CSRF-TOKEN': csrf
-            }
+            },
+            body: JSON.stringify({ device_id: deviceId })
         })
         .then(r => {
             if (!r.ok) return r.json().then(err => { throw new Error(err.error || 'Reboot request failed') });
@@ -132,6 +142,7 @@
             btn.classList.add('active');
             btn.innerHTML = `<i class="bi bi-cpu-fill"></i> Test Mode Active`;
             startDiagnostics();
+            startResourcePolling();
         } else {
             exitTestMode();
         }
@@ -149,14 +160,103 @@
             btn.innerHTML = `<i class="bi bi-cpu-fill"></i> Test Mode`;
         }
         stopDiagnosticPolling();
+        stopResourcePolling();
     };
+
+    /**
+     * Start periodically polling device CPU / RAM / temperature while Test Mode is open
+     */
+    function startResourcePolling() {
+        stopResourcePolling();
+        pollDeviceResources();
+        resourcesInterval = setInterval(pollDeviceResources, RESOURCES_POLL_INTERVAL_MS);
+    }
+
+    function stopResourcePolling() {
+        if (resourcesInterval) {
+            clearInterval(resourcesInterval);
+            resourcesInterval = null;
+        }
+    }
+
+    function pollDeviceResources() {
+        const panel = document.getElementById('sv-diagnostic-panel');
+        const deviceId = panel?.dataset.deviceId;
+        const container = document.getElementById('diag-resources-list');
+        if (!panel || !deviceId || !container) return;
+
+        const token = document.querySelector('meta[name="surveillance-token"]')?.content || '';
+
+        fetch(`/api/surveillance/devices/${encodeURIComponent(deviceId)}/stats`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        })
+        .then(r => r.json())
+        .then(data => renderResources(data))
+        .catch(err => console.error('[Diagnostics] Resource poll error:', err));
+    }
+
+    function resourceBarClass(pct) {
+        if (pct >= 85) return 'critical';
+        if (pct >= 65) return 'warn';
+        return 'ok';
+    }
+
+    function renderResources(data) {
+        const container = document.getElementById('diag-resources-list');
+        const updated = document.getElementById('diag-resources-updated');
+        if (!container) return;
+
+        if (!data || !data.online) {
+            container.innerHTML = `<div class="sv-text-muted">Device offline — no live stats.</div>`;
+            if (updated) updated.textContent = '';
+            return;
+        }
+
+        const cpu = Number(data.cpu ?? 0);
+        const ram = Number(data.ram ?? 0);
+        const temp = Number(data.temperature ?? 0);
+
+        container.innerHTML = `
+            <div class="sv-resource-item">
+                <div class="sv-resource-item-head">
+                    <span><i class="bi bi-cpu"></i> CPU</span>
+                    <span class="sv-mono">${cpu}%</span>
+                </div>
+                <div class="sv-resource-bar"><div class="sv-resource-bar-fill ${resourceBarClass(cpu)}" style="width:${Math.min(cpu, 100)}%"></div></div>
+            </div>
+            <div class="sv-resource-item">
+                <div class="sv-resource-item-head">
+                    <span><i class="bi bi-memory"></i> RAM</span>
+                    <span class="sv-mono">${ram}%</span>
+                </div>
+                <div class="sv-resource-bar"><div class="sv-resource-bar-fill ${resourceBarClass(ram)}" style="width:${Math.min(ram, 100)}%"></div></div>
+            </div>
+            <div class="sv-resource-item">
+                <div class="sv-resource-item-head">
+                    <span><i class="bi bi-thermometer-half"></i> Temperature</span>
+                    <span class="sv-mono">${temp}°C</span>
+                </div>
+                <div class="sv-resource-bar"><div class="sv-resource-bar-fill ${resourceBarClass(temp)}" style="width:${Math.min(temp, 100)}%"></div></div>
+            </div>`;
+
+        if (updated) {
+            const now = new Date();
+            updated.textContent = 'Updated ' + now.toLocaleTimeString('en-US', { hour12: false });
+        }
+    }
 
     /**
      * Start Diagnostic Checks
      */
     window.startDiagnostics = function () {
+        const deviceId = document.getElementById('sv-diagnostic-panel')?.dataset.deviceId;
         const token = document.querySelector('meta[name="surveillance-token"]')?.content || '';
         const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+        if (!deviceId) {
+            showDiagnosticError('Cannot determine which device to diagnose.');
+            return;
+        }
 
         stopDiagnosticPolling();
         resetDiagnosticUI();
@@ -167,7 +267,8 @@
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`,
                 'X-CSRF-TOKEN': csrf
-            }
+            },
+            body: JSON.stringify({ device_id: deviceId })
         })
         .then(r => {
             if (!r.ok) return r.json().then(err => { throw new Error(err.error || 'Diagnostic trigger failed') });
@@ -321,9 +422,10 @@
      */
     function pollDiagnosticStatus() {
         if (!currentRequestId) return;
+        const deviceId = document.getElementById('sv-diagnostic-panel')?.dataset.deviceId || '';
         const token = document.querySelector('meta[name="surveillance-token"]')?.content || '';
 
-        fetch(`/api/surveillance/diagnostic/status/${currentRequestId}`, {
+        fetch(`/api/surveillance/diagnostic/status/${currentRequestId}?device_id=${encodeURIComponent(deviceId)}`, {
             headers: {
                 'Authorization': `Bearer ${token}`
             }

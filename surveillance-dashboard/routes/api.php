@@ -51,6 +51,7 @@ Route::get('/surveillance/diagnostic/status/{requestId}', [DiagnosticController:
 
 // ── Recording Sync Control ──────────────────────────────────────────────────
 Route::post('/surveillance/sync/scan',                 [QnapSyncController::class, 'scan']);
+Route::get('/surveillance/sync/scan/status/{requestId}', [QnapSyncController::class, 'scanStatus']);
 Route::post('/surveillance/sync/start',                [QnapSyncController::class, 'start']);
 Route::get('/surveillance/sync/progress/{requestId}',  [QnapSyncController::class, 'progress']);
 Route::post('/surveillance/sync/pause/{requestId}',    [QnapSyncController::class, 'pause']);
@@ -73,6 +74,19 @@ Route::post('/device-agent/command-result',   [\App\Http\Controllers\DeviceAgent
 Route::post('/device-agent/terminal-ready',   [\App\Http\Controllers\DeviceAgentController::class, 'terminalReady']);
 Route::post('/device-agent/terminal-closed',  [\App\Http\Controllers\DeviceAgentController::class, 'terminalClosed']);
 Route::post('/device-agent/gps-update',       [\App\Http\Controllers\DeviceAgentController::class, 'gpsUpdate']);
+
+// ── Device Live Stats (CPU / RAM / Temperature) for Test Mode panel ──────────
+Route::get('/surveillance/devices/{deviceId}/stats', [\App\Http\Controllers\DeviceAgentController::class, 'stats']);
+
+// ── Device Registry (discovery + registration) ────────────────────────────────
+// NOTE: /pending must stay registered before the bare {deviceId} route below,
+// otherwise it would be swallowed as a literal device id.
+Route::get('/surveillance/devices/pending',                        [\App\Http\Controllers\DeviceController::class, 'pending']);
+Route::post('/surveillance/devices/{deviceId}/register',           [\App\Http\Controllers\DeviceController::class, 'register']);
+Route::get('/surveillance/devices/{deviceId}/camera-config',       [\App\Http\Controllers\DeviceController::class, 'cameraConfig']);
+Route::put('/surveillance/devices/{deviceId}',                      [\App\Http\Controllers\DeviceController::class, 'update']);
+Route::delete('/surveillance/devices/{deviceId}',                   [\App\Http\Controllers\DeviceController::class, 'destroy']);
+Route::get('/surveillance/devices/{deviceId}',                      [\App\Http\Controllers\DeviceController::class, 'show']);
 
 // ── Fleet Map API Endpoints ───────────────────────────────────────────────────
 Route::get('/surveillance/map/devices',           [\App\Http\Controllers\MapController::class, 'devicesGeoJson']);

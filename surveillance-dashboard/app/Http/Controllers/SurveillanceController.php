@@ -2,12 +2,16 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Controllers\TunnelController;
+use App\Services\DeviceRegistry;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\View\View;
 
 class SurveillanceController extends Controller
 {
+    public function __construct(private DeviceRegistry $deviceRegistry)
+    {
+    }
+
     /**
      * Display the live surveillance dashboard (monitoring room).
      * Shows ALL cameras from ALL enabled devices, grouped by device.
@@ -25,8 +29,9 @@ class SurveillanceController extends Controller
     public function devices(): View
     {
         $devices = $this->resolveAllDevices();
+        $pendingDevices = $this->deviceRegistry->pendingDevices();
 
-        return view('surveillance.devices', compact('devices'));
+        return view('surveillance.devices', compact('devices', 'pendingDevices'));
     }
 
     /**
@@ -79,29 +84,11 @@ class SurveillanceController extends Controller
      */
     private function resolveAllDevices()
     {
-        $deviceConfigs = config('surveillance.devices', []);
-
-        // Backward compatibility: if no devices, wrap legacy cameras as single device
-        if (empty($deviceConfigs)) {
-            $legacyCameras = config('surveillance.cameras', []);
-            if (!empty($legacyCameras)) {
-                $server = config('surveillance.media_server');
-                $deviceConfigs = [[
-                    'id'              => 'jetson-default',
-                    'name'            => 'Jetson (Default)',
-                    'location'        => 'Default',
-                    'host'            => $server['host'],
-                    'hls_port'        => $server['hls_port'],
-                    'webrtc_port'     => $server['webrtc_port'],
-                    'hls_base_url'    => $server['hls_base_url'] ?? null,
-                    'webrtc_base_url' => $server['webrtc_base_url'] ?? null,
-                    'tunnel_cache_key' => TunnelController::CACHE_KEY,
-                    'api_token'       => config('surveillance.api_token'),
-                    'enabled'         => true,
-                    'cameras'         => $legacyCameras,
-                ]];
-            }
-        }
+        // No more legacy-config fallback: devices are self-registering now
+        // (see DeviceRegistry). An empty registry just means no device has
+        // registered yet — that's shown as "Discovered Devices" waiting to
+        // be registered, or an honest empty state, not a fake device.
+        $deviceConfigs = $this->deviceRegistry->registeredDevices()->all();
 
         return collect($deviceConfigs)
             ->filter(fn($d) => $d['enabled'] ?? false)
@@ -132,24 +119,23 @@ class SurveillanceController extends Controller
         $cameras = collect($device['cameras'] ?? [])
             ->filter(fn($cam) => $cam['enabled'] ?? false)
             ->map(function ($cam) use ($hlsBase, $webrtcBase, $device) {
-                $pathHd    = $cam['path'];
-                $pathSd    = $cam['path_sub']   ?? $cam['path'];
-                $pathUltra = $cam['path_ultra'] ?? $cam['path_sub'] ?? $cam['path'];
-                $pathLive  = $cam['path_live']  ?? "{$pathHd}_live";
+                $pathHd = $cam['path'];
+                $pathSd = $cam['path_sub'] ?? $cam['path'];
 
                 $settings = Cache::get("camera_settings_{$cam['id']}", [
-                    'quality' => 'hd',
+                    // "Sub" is the default: native MediaMTX sub-stream, no FFmpeg
+                    // re-encode, lowest resource usage on the device.
+                    'quality' => 'sd',
                     'fps'     => 15,
                 ]);
 
                 return array_merge($cam, [
                     'device_id'       => $device['id'],
-                    'hls_url'         => "{$hlsBase}/{$pathLive}/index.m3u8",
+                    // Default player source = Sub stream (served natively, no transcoding)
+                    'hls_url'         => "{$hlsBase}/{$pathSd}/index.m3u8",
                     'webrtc_url'      => "{$webrtcBase}/{$pathHd}",
                     'hls_url_hd'      => "{$hlsBase}/{$pathHd}/index.m3u8",
                     'hls_url_sd'      => "{$hlsBase}/{$pathSd}/index.m3u8",
-                    'hls_url_ultra'   => "{$hlsBase}/{$pathUltra}/index.m3u8",
-                    'hls_url_live'    => "{$hlsBase}/{$pathLive}/index.m3u8",
                     'current_quality' => $settings['quality'],
                     'current_fps'     => $settings['fps'],
                 ]);

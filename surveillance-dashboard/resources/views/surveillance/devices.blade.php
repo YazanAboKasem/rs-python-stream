@@ -7,9 +7,47 @@
 
     <div class="sv-section-header" style="display:flex;align-items:center;margin-bottom:24px">
         <div>
-            <h1 class="sv-section-title">Jetson Devices</h1>
+            <h1 class="sv-section-title">Devices</h1>
             <span class="sv-section-count">{{ $devices->count() }} {{ $devices->count() === 1 ? 'device' : 'devices' }} registered</span>
         </div>
+    </div>
+
+    {{-- Discovered / Unregistered Devices --}}
+    <div class="sv-section-header" id="sv-pending-devices-section" style="{{ $pendingDevices->isEmpty() ? 'display:none' : '' }};margin-bottom:12px">
+        <div>
+            <h2 class="sv-section-title" style="font-size:16px">
+                <i class="bi bi-broadcast" style="color:var(--amber)"></i>
+                Discovered Devices
+            </h2>
+            <span class="sv-section-count">Connected but not yet registered</span>
+        </div>
+    </div>
+    <div class="sv-devices-list" id="sv-pending-devices-list" style="margin-bottom:28px">
+        @foreach ($pendingDevices as $pending)
+            <div class="sv-device-card pending" id="pending-device-card-{{ $pending->device_id }}">
+                <div class="sv-device-card-header">
+                    <div class="sv-device-card-info">
+                        <div class="sv-device-status-indicator online">
+                            <span class="sv-device-status-dot"></span>
+                        </div>
+                        <div class="sv-device-card-text">
+                            <div class="sv-device-card-name mono">{{ $pending->device_id }}</div>
+                            <div class="sv-device-card-meta">
+                                <i class="bi bi-hdd-network"></i> {{ $pending->hostname ?? 'Unknown host' }}
+                                <span class="sv-device-card-sep">·</span>
+                                Last seen {{ $pending->last_seen_at?->diffForHumans() }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <button class="sv-btn sv-btn-accent"
+                        onclick="openDeviceRegisterModal('{{ $pending->device_id }}')">
+                        <i class="bi bi-plus-circle-fill"></i>
+                        Register
+                    </button>
+                </div>
+            </div>
+        @endforeach
     </div>
 
     {{-- Devices List --}}
@@ -37,11 +75,20 @@
                         </div>
                     </div>
 
-                    <a href="{{ route('surveillance.device-settings', $device['id']) }}"
-                       class="sv-btn sv-btn-secondary sv-device-settings-btn">
-                        <i class="bi bi-gear-fill"></i>
-                        Settings
-                    </a>
+                    <div style="display:flex;gap:8px">
+                        <button class="sv-btn sv-btn-secondary" onclick="openDeviceEditModal('{{ $device['id'] }}')">
+                            <i class="bi bi-pencil-fill"></i>
+                            Edit
+                        </button>
+                        <a href="{{ route('surveillance.device-settings', $device['id']) }}"
+                           class="sv-btn sv-btn-secondary sv-device-settings-btn">
+                            <i class="bi bi-gear-fill"></i>
+                            Settings
+                        </a>
+                        <button class="sv-btn sv-btn-danger" onclick="deleteDevice('{{ $device['id'] }}', '{{ addslashes($device['name']) }}')" title="Delete device">
+                            <i class="bi bi-trash-fill"></i>
+                        </button>
+                    </div>
                 </div>
 
                 {{-- Device Details (expandable) --}}
@@ -70,10 +117,16 @@
         @empty
             <div class="sv-empty-state">
                 <i class="bi bi-cpu" style="font-size:48px;opacity:0.2"></i>
-                <p>No devices configured.</p>
-                <p class="sv-empty-hint">Add devices in <code>config/surveillance.php</code></p>
+                <p>No devices registered yet.</p>
+                <p class="sv-empty-hint">Power on a device — once it connects it will appear above under "Discovered Devices" ready to register.</p>
             </div>
         @endforelse
     </div>
 
+    <x-device-register-modal />
+
 @endsection
+
+@push('scripts')
+    <script src="{{ asset('js/device-register.js') }}?v={{ config('surveillance.asset_version', '1') }}"></script>
+@endpush

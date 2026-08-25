@@ -1,0 +1,32 @@
+{
+  "cam1": {
+    "ip": null,
+    "user": null,
+    "password": null,
+    "channel": 1,
+    "type": "hikvision",
+    "rtsp_port": 554,
+    "ptz": false,
+    "label": "front"
+  },
+  "cam2": {
+    "ip": null,
+    "user": null,
+    "password": null,
+    "channel": 1,
+    "type": "hikvision",
+    "rtsp_port": 554,
+    "ptz": false,
+    "label": "back"
+  },
+  "cam3": {
+    "ip": null,
+    "user": null,
+    "password": null,
+    "channel": 1,
+    "type": "hikvision",
+    "rtsp_port": 554,
+    "ptz": false,
+    "label": "cam3"
+  }
+}

@@ -1101,6 +1101,11 @@ body::before {
     border-left: 3px solid var(--red);
 }
 
+.sv-device-card.pending {
+    border-left: 3px solid var(--amber);
+    border-style: dashed;
+}
+
 .sv-device-card-header {
     display: flex;
     align-items: center;
@@ -1532,6 +1537,42 @@ body::before {
     gap: 10px;
     color: var(--text-secondary);
     padding: 20px 0;
+}
+.sv-resource-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+.sv-resource-item-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+.sv-resource-item-head i {
+    color: var(--accent);
+    margin-right: 4px;
+}
+.sv-resource-bar {
+    width: 100%;
+    height: 7px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+}
+.sv-resource-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--green, #2ecc71);
+    transition: width 0.4s ease;
+}
+.sv-resource-bar-fill.warn {
+    background: var(--amber, #ffab40);
+}
+.sv-resource-bar-fill.critical {
+    background: #ff5252;
 }
 .sv-spinner-sm {
     width: 16px;
@@ -2172,6 +2213,15 @@ body::before {
     .sv-layout:not(.sv-sidebar-collapsed) .sv-nav-sidebar {
         transform: translateX(0);
         box-shadow: 20px 0 60px rgba(0,0,0,0.5);
+    }
+
+    /* Dim the stream/content behind the sidebar while it's open on mobile */
+    .sv-layout:not(.sv-sidebar-collapsed)::after {
+        content: '';
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.45);
+        z-index: 150;
     }
 
     .sv-device-group-cameras {

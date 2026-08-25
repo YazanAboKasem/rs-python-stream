@@ -6,12 +6,17 @@ use App\Models\DeviceAgent;
 use App\Models\DeviceAgentCommand;
 use App\Models\DeviceLocationLog;
 use App\Models\DeviceTerminalSession;
+use App\Services\DeviceRegistry;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
 class DeviceAgentController extends Controller
 {
+    public function __construct(private DeviceRegistry $deviceRegistry)
+    {
+    }
+
     // ─── Agent API Endpoints (called by Python agent) ──────────────────────────
 
     /**
@@ -61,16 +66,26 @@ class DeviceAgentController extends Controller
             // Log location history
             DeviceLocationLog::create([
                 'device_id'   => $request->input('jetson_id'),
+                'session_id'  => $request->input('session_id'),
                 'latitude'    => $lat,
                 'longitude'   => $lng,
                 'recorded_at' => now(),
             ]);
+
         }
 
         $agent = DeviceAgent::updateOrCreate(
             ['jetson_id' => $request->input('jetson_id')],
             $updateData
         );
+
+        // Discovery: an unregistered device heartbeating in gets recorded
+        // as `pending` so it shows up on the dashboard for registration.
+        try {
+            $this->deviceRegistry->seen($request->input('jetson_id'), $request->input('hostname'));
+        } catch (\Exception $e) {
+            \Log::error('[DeviceAgent] Failed to record device seen: ' . $e->getMessage());
+        }
 
         return response()->json([
             'success' => true,
@@ -292,6 +307,28 @@ class DeviceAgentController extends Controller
     }
 
 
+    /**
+     * GET /api/surveillance/devices/{deviceId}/stats
+     * Polled by the dashboard (Test Mode panel) to show live CPU/RAM/temperature.
+     */
+    public function stats(string $deviceId): JsonResponse
+    {
+        $agent = DeviceAgent::where('jetson_id', $deviceId)->first();
+
+        if (!$agent) {
+            return response()->json(['online' => false]);
+        }
+
+        return response()->json([
+            'online' => $agent->online && $agent->last_seen && $agent->last_seen->diffInSeconds(now()) < 60,
+            'cpu' => $agent->cpu,
+            'ram' => $agent->ram,
+            'disk' => $agent->disk,
+            'temperature' => $agent->temperature,
+            'last_seen' => $agent->last_seen?->toIso8601String(),
+        ]);
+    }
+
     // ─── GPS Update Endpoint ────────────────────────────────────────────────
 
     /**
@@ -326,12 +363,14 @@ class DeviceAgentController extends Controller
         // Log to location history
         DeviceLocationLog::create([
             'device_id'   => $jetsonId,
+            'session_id'  => $request->input('session_id'),
             'latitude'    => $lat,
             'longitude'   => $lng,
             'speed'       => $request->input('speed'),
             'altitude'    => $request->input('altitude'),
             'recorded_at' => now(),
         ]);
+
 
         return response()->json(['success' => true]);
     }
