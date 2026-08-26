@@ -9,8 +9,17 @@ no PPE, no cone/zone geometry, no PTZ investigation. It exists to prove
 the Jetson can do real-time detection+tracking end to end without
 touching the existing recording/streaming pipeline (stream.py,
 camera-control.py, mediamtx.yml are all untouched and unaware this
-script exists — it only reads the RTSP sub-stream MediaMTX is already
+script exists — it only reads an RTSP stream MediaMTX is already
 publishing).
+
+Uses the MAIN stream, not the sub-stream: benchmarked on this device,
+YOLO's internal preprocessing resizes every frame to a fixed 640x640
+before inference, so a 2688x1520 main-stream frame costs virtually the
+same as a 640x360 sub-stream one (measured ~34ms vs ~35ms/frame) — but
+the main stream gives far more real detail for small/distant subjects
+(a person's PPE, a distant cone), which the sub-stream's already-low
+640x360 source can't recover no matter how much a later crop is
+upscaled.
 
 One event + one snapshot is sent per NEW track id, not per frame.
 
@@ -203,7 +212,7 @@ def main():
     event_token = load_event_token()
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
 
-    rtsp_url = f"rtsp://{MEDIA_SERVER}:{RTSP_PORT}/{camera_key}_sub"
+    rtsp_url = f"rtsp://{MEDIA_SERVER}:{RTSP_PORT}/{camera_key}"  # main stream — see module docstring
     log(f"REAR_FIXED camera: {camera_key} ({camera.get('label')}) — {rtsp_url}")
 
     backend = pick_capture_backend()
